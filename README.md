@@ -82,6 +82,9 @@ Any program starts from the same default: project read-write, network off, nothi
 make test          # unit tests, run anywhere (macOS included)
 make test-linux    # adds the end-to-end tests with real bwrap; run on Linux/WSL
 make vet
+./scripts/m6-check.sh   # 10 quick checks against real bwrap (Linux/WSL)
 ```
+
+Real-program checks (Kiro CLI, Kiro Crew, Node, Burrito) are in [docs/m6-runbook.md](docs/m6-runbook.md); the planned per-domain network allowlist is in [docs/v2-network-design.md](docs/v2-network-design.md).
 
 The design is in [docs/architecture.md](docs/architecture.md), and the corrections and milestones are in [docs/implementation-plan.md](docs/implementation-plan.md).
