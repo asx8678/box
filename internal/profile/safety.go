@@ -63,6 +63,8 @@ func NewProtected(h host.Host, d Dirs, boxBinary string, wsl bool) (Protected, e
 		d.Data,
 		filepath.Join(d.Home, ".ssh"),
 		filepath.Join(d.Home, ".gnupg"),
+		filepath.Join(d.Home, ".gitconfig"), // aliases, core.fsmonitor, core.hooksPath
+		filepath.Join(d.Home, ".config/git"),
 		filepath.Join(d.Home, ".config/systemd"),
 		filepath.Join(d.Home, ".config/autostart"),
 	}

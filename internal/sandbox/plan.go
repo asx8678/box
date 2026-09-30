@@ -139,6 +139,9 @@ func Build(h host.Host, in Input) (*Plan, error) {
 	}
 	home := in.Dirs.Home
 	b := &builder{h: h, prot: in.Protected}
+	if err := b.writableRoots(in.Workdir, p, home); err != nil {
+		return nil, err
+	}
 	if err := b.system(); err != nil {
 		return nil, err
 	}
@@ -198,6 +201,7 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		b.add(ROBind, self, InitPath)
 		command = append([]string{InitPath, "--box-init", "--"}, command...)
 	}
+	b.pinParents()
 
 	// Parents mount before children, so nothing is hidden by a later,
 	// shallower mount. Ties keep the order above.
@@ -256,10 +260,11 @@ func (plan *Plan) flags(in Input, network bool) {
 }
 
 type builder struct {
-	h      host.Host
-	prot   profile.Protected
-	mounts []Mount
-	create []string
+	h       host.Host
+	prot    profile.Protected
+	mounts  []Mount
+	create  []string
+	rwRoots []string // host folders the program can write, same path inside
 }
 
 func (b *builder) add(k Kind, src, dest string) {
@@ -339,6 +344,10 @@ func (b *builder) programDirs(dirs []string, wd, home string) error {
 			return err
 		}
 		if i := slices.IndexFunc(b.mounts, func(m Mount) bool { return m.Dest == c }); i >= 0 {
+			if b.mounts[i].Kind != Bind || b.mounts[i].Src != c {
+				return fmt.Errorf("the program's folder %s is a fresh, private folder inside the box; "+
+					"move the program somewhere else", c)
+			}
 			b.mounts[i].Kind = ROBind
 			continue
 		}
@@ -353,6 +362,9 @@ func (b *builder) programDirs(dirs []string, wd, home string) error {
 func (b *builder) hostPath(section, raw, home string, k Kind, mustExist bool) error {
 	expanded, err := profile.Expand(raw, home)
 	if err != nil {
+		return fmt.Errorf("%s: %w", section, err)
+	}
+	if err := b.noPlantedSymlink(expanded); err != nil {
 		return fmt.Errorf("%s: %w", section, err)
 	}
 	c, err := profile.Canonical(b.h, expanded)
@@ -375,6 +387,93 @@ func (b *builder) hostPath(section, raw, home string, k Kind, mustExist bool) er
 	}
 	b.add(k, c, c)
 	return nil
+}
+
+// writableRoots records the host folders the program will be able to
+// write at their own path: the project (if read-write) and the profile's
+// read-write folders. Symlinks inside them may have been planted by the
+// program on an earlier run.
+func (b *builder) writableRoots(workdir string, p profile.Profile, home string) error {
+	if p.Workdir.Mode == "rw" {
+		b.rwRoots = append(b.rwRoots, workdir)
+	}
+	for _, raw := range slices.Concat(p.Home.RW, p.Extra.RW) {
+		if expanded, err := profile.Expand(raw, home); err == nil {
+			b.rwRoots = append(b.rwRoots, expanded)
+		}
+	}
+	for i, r := range b.rwRoots {
+		c, err := profile.Canonical(b.h, r)
+		if err != nil {
+			return err
+		}
+		b.rwRoots[i] = c
+	}
+	return nil
+}
+
+// noPlantedSymlink refuses a configured path that runs through a symlink
+// inside a folder the program can write: the program may have planted it
+// to redirect the mount (plan B4/B6). Symlinks elsewhere are the user's own.
+func (b *builder) noPlantedSymlink(path string) error {
+	cur := "/"
+	for _, name := range strings.Split(strings.Trim(path, "/"), "/") {
+		dir, err := profile.Canonical(b.h, cur)
+		if err != nil {
+			return err
+		}
+		at := filepath.Join(dir, name)
+		cur = filepath.Join(cur, name)
+		fi, err := b.h.Lstat(at)
+		if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			continue
+		}
+		for _, r := range b.rwRoots {
+			if profile.Within(at, r) && at != r {
+				return fmt.Errorf("%s is a symlink inside %s, which the program can write; refusing to follow it", at, r)
+			}
+		}
+	}
+	return nil
+}
+
+// pinParents turns every folder between a read-write mount and a read-only
+// mount of the same host path inside it into a mount point of its own (a
+// read-write bind onto itself). Linux refuses to rename or remove a mount
+// point, but not a folder that merely contains one, so without this the
+// program could move .git (or a tool's folder) aside and put a writable copy
+// in its place on the host.
+func (b *builder) pinParents() {
+	for _, m := range slices.Clone(b.mounts) {
+		if m.Kind != ROBind || m.Src != m.Dest {
+			continue
+		}
+		root, ok := b.rwParent(m.Dest)
+		if !ok {
+			continue
+		}
+		for dir := filepath.Dir(m.Dest); dir != root && profile.Within(dir, root); dir = filepath.Dir(dir) {
+			if !slices.ContainsFunc(b.mounts, func(x Mount) bool { return x.Dest == dir }) {
+				b.add(Bind, dir, dir)
+			}
+		}
+	}
+}
+
+// rwParent returns the deepest same-path mount strictly containing dest, if
+// that mount is read-write.
+func (b *builder) rwParent(dest string) (string, bool) {
+	best := -1
+	for i, m := range b.mounts {
+		if (m.Kind == ROBind || m.Kind == Bind) && m.Src == m.Dest && m.Dest != dest &&
+			profile.Within(dest, m.Dest) && (best < 0 || depth(m.Dest) > depth(b.mounts[best].Dest)) {
+			best = i
+		}
+	}
+	if best < 0 || b.mounts[best].Kind != Bind {
+		return "", false
+	}
+	return b.mounts[best].Dest, true
 }
 
 // readOnlyCovers reports whether the deepest same-path mount containing
@@ -408,6 +507,11 @@ func (b *builder) protectGit(wd string) error {
 		p := filepath.Join(gitDir, name)
 		fi, err := b.h.Lstat(p)
 		if err != nil {
+			if name == "hooks" {
+				// Otherwise the program could create it and add a hook.
+				b.create = append(b.create, p)
+				b.add(ROBind, p, p)
+			}
 			continue
 		}
 		if fi.Mode()&fs.ModeSymlink != 0 {

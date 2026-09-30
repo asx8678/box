@@ -92,7 +92,13 @@ func Lookup(h host.Host, name, wd string) (Program, error) {
 	if len(head) >= 11 && bytes.HasPrefix(head, []byte("\x7fELF")) && bytes.Equal(head[8:11], []byte("AI\x02")) {
 		prog.Env = append(prog.Env, "APPIMAGE_EXTRACT_AND_RUN=1")
 	}
-	prog.Path = path
+	// Run it by its path through canonical folders: only those are mounted.
+	// The name stays as typed, for programs that look at argv[0].
+	dir, err := profile.Canonical(h, filepath.Dir(path))
+	if err != nil {
+		return Program{}, lookupErr(ExitCannotRun, "%s: %v", path, err)
+	}
+	prog.Path = filepath.Join(dir, filepath.Base(path))
 
 	dirs := &dirSet{h: h}
 	dirs.add(filepath.Dir(path))
@@ -140,8 +146,8 @@ type dirSet struct {
 // add records dir if it isn't under the system paths box always mounts.
 func (d *dirSet) add(dir string) {
 	c, err := profile.Canonical(d.h, dir)
-	if err != nil || systemPath(c) {
-		return
+	if err != nil || c == "/" || systemPath(c) {
+		return // "/" is the prefix of /bin/sh; the real /usr/bin/sh is covered
 	}
 	for _, have := range d.list {
 		if have == c {

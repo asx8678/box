@@ -100,3 +100,18 @@ func TestShebang(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupShellScriptsAndSymlinkedFolders(t *testing.T) {
+	f := machine()
+	f.File("/usr/bin/dash", "\x7fELF", 0o755).Symlink("/usr/bin/sh", "dash")
+	f.File("/home/u/code/proj/run.sh", "#!/bin/sh\necho hi\n", 0o755)
+	p, err := Lookup(f, "./run.sh", "/home/u/code/proj")
+	if err != nil || !slices.Equal(p.Dirs, []string{"/home/u/code/proj"}) {
+		t.Errorf("#!/bin/sh script: %+v, %v", p, err)
+	}
+	f.File("/data/proj/run", "\x7fELF", 0o755).Symlink("/home/u/code/p2", "/data/proj")
+	p, err = Lookup(f, "./run", "/home/u/code/p2")
+	if err != nil || p.Path != "/data/proj/run" {
+		t.Errorf("symlinked folder: path %q, %v", p.Path, err)
+	}
+}

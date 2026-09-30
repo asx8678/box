@@ -168,7 +168,10 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	if err != nil {
 		return ExitBox, err
 	}
-	if r.prog, err = sandbox.Lookup(h, name, wd); err != nil {
+	if r.wd, err = profile.Canonical(h, wd); err != nil {
+		return ExitBox, err
+	}
+	if r.prog, err = sandbox.Lookup(h, name, r.wd); err != nil {
 		var le *sandbox.LookupError
 		if errors.As(err, &le) {
 			return le.Code, err
@@ -185,9 +188,6 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 		if !errors.Is(perr, sandbox.ErrNeedsLinux) {
 			fmt.Fprintf(stderr, "box: warning: %v\n     (printing the command anyway)\n", perr)
 		}
-	}
-	if r.wd, err = profile.Canonical(h, wd); err != nil {
-		return ExitBox, err
 	}
 	folders, err := profile.LoadFolders(profile.FoldersPath(dirs))
 	if err != nil {

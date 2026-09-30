@@ -87,6 +87,23 @@ func TestSeccompProgram(t *testing.T) {
 			{"32-bit AF_VSOCK", both, c.arch, c.socket, []uint64{afVsock}, noaf},
 			{"32-bit other", both, c.arch, 3, nil, allow},
 			{"unknown ABI", both, 0x12345678, n.ioctl, []uint64{0, tiocsti}, nosys},
+			{"io_uring with vsock blocked", both, n.arch, ioUringSetup, nil, nosys},
+			{"32-bit io_uring with vsock blocked", both, c.arch, ioUringSetup, nil, nosys},
+		}
+		ttyOnly, err := SeccompProgram(goarch, Filter{TIOCSTI: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := run(t, ttyOnly, n.arch, ioUringSetup); got != allow {
+			t.Errorf("%s: io_uring refused without the vsock block: %#x", goarch, got)
+		}
+		if c.socketcall != 0 {
+			if got := run(t, both, c.arch, c.socketcall, 1); got != nosys {
+				t.Errorf("%s: 32-bit socketcall allowed with vsock blocked: %#x", goarch, got)
+			}
+			if got := run(t, ttyOnly, c.arch, c.socketcall, 1); got != allow {
+				t.Errorf("%s: 32-bit socketcall refused without the vsock block: %#x", goarch, got)
+			}
 		}
 		if a.x32 {
 			cases = append(cases, struct {

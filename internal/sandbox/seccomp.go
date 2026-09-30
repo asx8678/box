@@ -13,7 +13,10 @@ type Filter struct {
 	// terminal on kernels that still allow it (legacy_tiocsti isn't 0).
 	TIOCSTI bool
 	// Vsock blocks socket(AF_VSOCK): on WSL, the VM's sockets lead to the
-	// Windows host, outside every namespace.
+	// Windows host, outside every namespace. It also refuses the two ways
+	// around a socket() check: the 32-bit socketcall multiplexer (its
+	// arguments are behind a pointer seccomp can't read) and io_uring, which
+	// can create sockets itself. Programs fall back to plain system calls.
 	Vsock bool
 }
 
@@ -40,16 +43,18 @@ const (
 	offArg0 = 16
 	offArg1 = 24
 
-	tiocsti   = 0x5412
-	tioclinux = 0x541c
-	afVsock   = 40
-	x32Bit    = 0x40000000
+	tiocsti      = 0x5412
+	tioclinux    = 0x541c
+	afVsock      = 40
+	x32Bit       = 0x40000000
+	ioUringSetup = 425 // the same number on every architecture box supports
 )
 
 // abi is one system call ABI a process on this machine may use.
 type abi struct {
 	arch          uint32
 	ioctl, socket uint32
+	socketcall    uint32 // 0 if the ABI has none
 }
 
 type archInfo struct {
@@ -59,8 +64,8 @@ type archInfo struct {
 }
 
 var arches = map[string]archInfo{
-	"amd64": {native: abi{0xc000003e, 16, 41}, compat: abi{0x40000003, 54, 359}, x32: true},
-	"arm64": {native: abi{0xc00000b7, 29, 198}, compat: abi{0x40000028, 54, 281}},
+	"amd64": {native: abi{0xc000003e, 16, 41, 0}, compat: abi{0x40000003, 54, 359, 102}, x32: true},
+	"arm64": {native: abi{0xc00000b7, 29, 198, 0}, compat: abi{0x40000028, 54, 281, 0}},
 }
 
 // SeccompSupported reports whether box can build a filter for goarch.
@@ -92,18 +97,25 @@ func SeccompProgram(goarch string, f Filter) ([]byte, error) {
 	jeq := func(k uint32, t, e string) insn { return insn{code: bpfJeq, k: k, ifTrue: t, else_: e} }
 	ret := func(label string, k uint32) insn { return insn{code: bpfRet, k: k, label: label} }
 
+	// Per ABI: dispatch ioctl and socket to their argument checks, refuse
+	// the socket-check bypasses when blocking vsock, allow the rest.
+	syscalls := func(x abi) []insn {
+		out := []insn{jeq(x.ioctl, "ioctl", ""), jeq(x.socket, "socket", "")}
+		if f.Vsock {
+			out = append(out, jeq(ioUringSetup, "nosys", ""))
+			if x.socketcall != 0 {
+				out = append(out, jeq(x.socketcall, "nosys", ""))
+			}
+		}
+		return append(out, insn{code: bpfJa, ifTrue: "allow"})
+	}
 	p := []insn{ld(offArch), jeq(a.native.arch, "", "compat"), ld(offNr)}
 	if a.x32 {
 		p = append(p, insn{code: bpfJset, k: x32Bit, ifTrue: "nosys"})
 	}
-	p = append(p,
-		jeq(a.native.ioctl, "ioctl", ""),
-		jeq(a.native.socket, "socket", "allow"),
-		insn{code: bpfJeq, k: a.compat.arch, else_: "nosys", label: "compat"},
-		ld(offNr),
-		jeq(a.compat.ioctl, "ioctl", ""),
-		jeq(a.compat.socket, "socket", "allow"),
-	)
+	p = append(p, syscalls(a.native)...)
+	p = append(p, insn{code: bpfJeq, k: a.compat.arch, else_: "nosys", label: "compat"}, ld(offNr))
+	p = append(p, syscalls(a.compat)...)
 	if f.TIOCSTI {
 		p = append(p,
 			insn{code: bpfLdAbs, k: offArg1, label: "ioctl"},

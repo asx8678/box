@@ -66,8 +66,8 @@ func covering(earlier []Mount, dest string) (Mount, bool) {
 
 // makePath walks rel below base one component at a time without following
 // symlinks, creating missing folders (0700) and, for a file mount point, an
-// empty file (0600). For a symlink operation the last component must simply
-// not be a folder or a foreign symlink; bwrap creates it.
+// empty file (0600). For a symlink operation the last component must not
+// exist or already be a symlink (bwrap replaces an identical one).
 func makePath(base, rel string, isDir, symlink bool) error {
 	fd, err := unix.Open(base, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {

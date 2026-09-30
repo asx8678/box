@@ -129,6 +129,10 @@ func TestRefuses(t *testing.T) {
 		{"rw ~/.config", func(f *host.Fake, in *Input) { in.Profile.Extra.RW = []string{"~/.config"} }, "overlaps /home/u/.config/box"},
 		{"rw PATH folder", func(f *host.Fake, in *Input) { in.Profile.Extra.RW = []string{"~/.local/bin"} }, "overlaps /home/u/.local/bin"},
 		{"rw shell startup file", func(f *host.Fake, in *Input) { in.Profile.Extra.RW = []string{"~/.bashrc"} }, "overlaps /home/u/.bashrc"},
+		{"rw git config", func(f *host.Fake, in *Input) {
+			f.File("/home/u/.gitconfig", "", 0o644)
+			in.Profile.Extra.RW = []string{"~/.gitconfig"}
+		}, "overlaps /home/u/.gitconfig"},
 		{"rw private homes", func(f *host.Fake, in *Input) { in.Profile.Home.RW = []string{"~/.local/share"} }, "overlaps /home/u/.local/share/box"},
 		{"rw Windows AppData", func(f *host.Fake, in *Input) {
 			in.Profile.Extra.RW = []string{"/mnt/c/Users/win/AppData/Roaming"}
@@ -375,5 +379,69 @@ func TestProgramDirectlyInHomeIsRefused(t *testing.T) {
 		if _, err := Build(f, in); err == nil || !strings.Contains(err.Error(), "whole home folder") {
 			t.Errorf("%s: got %v", dir, err)
 		}
+	}
+}
+
+func TestProtectedFoldersCantBeRenamedAside(t *testing.T) {
+	f := machine()
+	f.Dir("/home/u/.kiro/crew/venv")
+	p := profile.Default("kirocrew")
+	p.Home.RW = []string{"~/.kiro"}
+	in := input(t, f, p)
+	in.ProgramDirs = []string{"/home/u/.kiro/crew/venv"}
+	plan, err := Build(f, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// .git and crew become mount points of their own, which Linux won't rename.
+	for _, pin := range []string{"/home/u/code/proj/.git", "/home/u/.kiro/crew"} {
+		i := indexOf(t, plan, Bind, pin)
+		if plan.Mounts[i].Src != pin {
+			t.Errorf("%s pinned from %s", pin, plan.Mounts[i].Src)
+		}
+	}
+	if pin, cfg := indexOf(t, plan, Bind, "/home/u/code/proj/.git"), indexOf(t, plan, ROBind, "/home/u/code/proj/.git/config"); pin > cfg {
+		t.Errorf("the pin (#%d) must mount before the protected file (#%d)", pin, cfg)
+	}
+}
+
+func TestMissingGitHooksAreCreatedReadOnly(t *testing.T) {
+	f := machine()
+	f.Dir("/home/u/code/nohooks/.git").File("/home/u/code/nohooks/.git/config", "", 0o644)
+	in := input(t, f, profile.Default("mytool"))
+	in.Workdir = "/home/u/code/nohooks"
+	plan, err := Build(f, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexOf(t, plan, ROBind, "/home/u/code/nohooks/.git/hooks")
+	if !slices.Contains(plan.Create, "/home/u/code/nohooks/.git/hooks") {
+		t.Errorf("hooks folder not created: %v", plan.Create)
+	}
+}
+
+func TestPlantedSymlinkInWritableFolderIsRefused(t *testing.T) {
+	f := machine()
+	f.Dir("/home/u/.aws").Symlink("/home/u/code/proj/vendor", "/home/u/.aws")
+	f.Symlink("/home/u/code/lib-link", "/home/u/code/shared-lib")
+	p := profile.Default("mytool")
+	p.Extra.RO = []string{"~/code/proj/vendor"}
+	if _, err := Build(f, input(t, f, p)); err == nil || !strings.Contains(err.Error(), "which the program can write") {
+		t.Errorf("planted symlink: got %v", err)
+	}
+	// The user's own symlinks, outside anything writable, are fine.
+	p.Extra.RO = []string{"~/code/lib-link"}
+	if _, err := Build(f, input(t, f, p)); err != nil {
+		t.Errorf("user symlink refused: %v", err)
+	}
+}
+
+func TestProgramInFreshFolderIsRefused(t *testing.T) {
+	f := machine()
+	in := input(t, f, profile.Default("mytool"))
+	in.ProgramDirs = []string{"/tmp"}
+	f.Dir("/tmp")
+	if _, err := Build(f, in); err == nil || !strings.Contains(err.Error(), "fresh, private") {
+		t.Errorf("got %v", err)
 	}
 }
