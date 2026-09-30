@@ -24,7 +24,15 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Vet
         run: make vet
-      - name: Unit and end-to-end tests
-        run: go test -count=1 -race ./...
+      - name: Unit tests
+        run: go test -count=1 -race $(go list ./... | grep -v /test/e2e)
+      - name: box --doctor
+        run: go run . --doctor
+      # Verbose, and failing instead of skipping, so the log shows every
+      # end-to-end result, including the Ctrl+C decision (plan B3).
+      - name: End-to-end tests
+        env:
+          BOX_E2E_REQUIRED: "1"
+        run: go test -count=1 -v ./test/e2e
       - name: Build
         run: make build-linux

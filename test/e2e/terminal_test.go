@@ -132,6 +132,9 @@ func (s *session) must(text string) {
 
 func needPython(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		if os.Getenv("BOX_E2E_REQUIRED") != "" {
+			t.Fatal("needs /usr/bin/python3")
+		}
 		t.Skip("needs /usr/bin/python3")
 	}
 }

@@ -56,6 +56,11 @@ func setup(t *testing.T) *env {
 	e.dirs = profile.Dirs{Home: e.home, Config: e.home + "/.config/box",
 		Data: e.home + "/.local/share/box", State: e.home + "/.local/state/box"}
 	if _, stderr, code := e.run("--doctor"); code != 0 {
+		// CI sets BOX_E2E_REQUIRED so a broken setup fails instead of
+		// quietly skipping every test.
+		if os.Getenv("BOX_E2E_REQUIRED") != "" {
+			t.Fatalf("bubblewrap can't run sandboxes here:\n%s", stderr)
+		}
 		t.Skipf("bubblewrap can't run sandboxes here:\n%s", stderr)
 	}
 	e.profile(profile.Default("sh"))
