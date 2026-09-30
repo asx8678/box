@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/asx8678/box/internal/host"
 )
@@ -125,11 +124,5 @@ func CheckConfigDir(d Dirs) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("%s is not a folder", d.Config)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s must be private to you (chmod 700 %s)", d.Config, d.Config)
-	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
-		return fmt.Errorf("%s is not owned by you", d.Config)
-	}
-	return nil
+	return checkPrivate(d.Config, fi, 0o077, "must be private to you (chmod 700 "+d.Config+")")
 }

@@ -79,7 +79,7 @@ func Lookup(h host.Host, name, wd string) (Program, error) {
 	if err != nil {
 		return Program{}, lookupErr(ExitCannotRun, "%s: %v", path, err)
 	}
-	if windowsDrive(real) || bytes.HasPrefix(head, []byte("MZ")) {
+	if profile.WindowsDrive(real) || bytes.HasPrefix(head, []byte("MZ")) {
 		return Program{}, lookupErr(ExitCannotRun,
 			"%s is a Windows program: it would run outside Linux, where box can't sandbox it", path)
 	}
@@ -210,9 +210,4 @@ func systemPath(p string) bool {
 		}
 	}
 	return false
-}
-
-func windowsDrive(p string) bool {
-	parts := strings.SplitN(strings.TrimPrefix(p, "/"), "/", 3)
-	return len(parts) >= 2 && parts[0] == "mnt" && len(parts[1]) == 1 && parts[1][0] >= 'a' && parts[1][0] <= 'z'
 }

@@ -79,8 +79,8 @@ Any program starts from the same default: project read-write, network off, nothi
 ## Development
 
 ```
-make test          # unit tests, run anywhere (macOS included)
-make test-linux    # adds the end-to-end tests with real bwrap; run on Linux/WSL
+make test          # quick unit tests, run anywhere (macOS included)
+make test-linux    # every test, uncached; on Linux/WSL that includes the end-to-end tests with real bwrap
 make vet
 ./scripts/m6-check.sh   # 10 quick checks against real bwrap (Linux/WSL)
 ```

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"image/color"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -79,7 +78,7 @@ func TestEditorMouse(t *testing.T) {
 	clickOn(t, e, e.hitsFn(), "f:0:mode") // ~/.tool ro → rw
 	clickOn(t, e, e.hitsFn(), "e:1")      // tick AWS_PROFILE
 	clickOn(t, e, e.hitsFn(), "save")
-	if !e.result.Saved {
+	if e.result == nil {
 		t.Fatalf("not saved: %q", e.msg)
 	}
 	p := e.result.Profile
@@ -161,17 +160,17 @@ func TestEditorSaveChecksName(t *testing.T) {
 	e.name.SetValue("taken")
 	e.Update(press(tea.KeyTab)) // save → wd:rw; back to save via activate
 	e.save()
-	if e.result.Saved || !strings.Contains(e.msg, "already exists") {
+	if e.result != nil || !strings.Contains(e.msg, "already exists") {
 		t.Errorf("saved over an existing profile: %q", e.msg)
 	}
 	e.name.SetValue("bad name")
 	e.save()
-	if e.result.Saved || e.focus != "name" {
+	if e.result != nil || e.focus != "name" {
 		t.Errorf("invalid name accepted: %q", e.msg)
 	}
 	e.name.SetValue("online")
 	e.save()
-	if !e.result.Saved || e.result.Name != "online" {
+	if e.result == nil || e.result.Name != "online" {
 		t.Errorf("valid save failed: %q", e.msg)
 	}
 }
@@ -187,7 +186,7 @@ func TestEditorPreviewAndCancel(t *testing.T) {
 		t.Fatal("esc didn't close the preview")
 	}
 	_, cmd := e.Update(press(tea.KeyEscape))
-	if cmd == nil || e.result.Saved {
+	if cmd == nil || e.result != nil {
 		t.Error("esc should cancel without saving")
 	}
 }
@@ -327,7 +326,7 @@ func TestEscGuardsUnsavedChanges(t *testing.T) {
 	if _, cmd := e.Update(press(tea.KeyEscape)); cmd != nil {
 		t.Error("esc after another key should warn again, not leave")
 	}
-	if e.result.Saved {
+	if e.result != nil {
 		t.Error("nothing should have been saved")
 	}
 }
@@ -346,7 +345,7 @@ func TestShortcuts(t *testing.T) {
 	}
 	e.Update(press(tea.KeyEscape))
 	e.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	if !e.result.Saved {
+	if e.result == nil {
 		t.Errorf("ctrl+s should save: %q", e.msg)
 	}
 }
@@ -372,7 +371,7 @@ func TestPreviewButtons(t *testing.T) {
 	}
 	clickOn(t, e, e.hitsFn(), "preview")
 	clickOn(t, e, e.hitsFn(), "pv:save")
-	if !e.result.Saved {
+	if e.result == nil {
 		t.Errorf("Save & run in the preview should save: %q", e.msg)
 	}
 }
@@ -402,16 +401,4 @@ func TestConfirmButtons(t *testing.T) {
 	if !m.yes {
 		t.Error("→ then enter should press Yes")
 	}
-}
-
-func TestColorizeKeepsText(t *testing.T) {
-	in := "env -i \\\n  HOME=/h \\\n/usr/bin/bwrap \\\n  --bind /a /a \\\n  -- /bin/x arg \\\n  3<<<'program=x\nprofile=y'\n# note"
-	out := ansiStrip(colorize(in))
-	if out != in {
-		t.Errorf("colorize changed the text:\n%s", out)
-	}
-}
-
-func ansiStrip(s string) string {
-	return regexp.MustCompile(`\x1b\[[0-9;:]*[A-Za-z]`).ReplaceAllString(s, "")
 }

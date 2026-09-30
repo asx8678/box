@@ -50,20 +50,6 @@ func Prepare(plan *Plan) error {
 	return nil
 }
 
-// covering returns the deepest earlier mount that contains dest.
-func covering(earlier []Mount, dest string) (Mount, bool) {
-	var best Mount
-	found := false
-	for _, m := range earlier {
-		if m.Dest != dest && (m.Dest == "/" || strings.HasPrefix(dest, m.Dest+"/")) {
-			if !found || depth(m.Dest) >= depth(best.Dest) {
-				best, found = m, true
-			}
-		}
-	}
-	return best, found
-}
-
 // makePath walks rel below base one component at a time without following
 // symlinks, creating missing folders (0700) and, for a file mount point, an
 // empty file (0600). For a symlink operation the last component must not

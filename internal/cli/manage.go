@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/asx8678/box/internal/profile"
@@ -40,26 +39,18 @@ func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	used := map[[2]string]int{} // (program, profile) → folders using it
-	for _, progs := range folders.Entries {
-		for prog, name := range progs {
-			used[[2]string{prog, name}]++
-		}
-	}
-	var programs []string
-	for _, e := range entries {
-		if e.IsDir() && profile.ValidName(e.Name()) {
-			programs = append(programs, e.Name())
-		}
-	}
-	sort.Strings(programs)
 	code, shown := 0, 0
-	for _, prog := range programs {
+	for _, e := range entries { // ReadDir sorts by name
+		prog := e.Name()
+		if !e.IsDir() || !profile.ValidName(prog) {
+			continue
+		}
 		names, err := profile.List(dirs, prog)
 		if err != nil || len(names) == 0 {
 			continue
 		}
 		shown++
+		used := folders.Uses(prog)
 		fmt.Fprintln(stdout, prog)
 		for _, name := range names {
 			p, err := profile.Load(profile.Path(dirs, prog, name), prog)
@@ -68,7 +59,7 @@ func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 				code = ExitBox
 				continue
 			}
-			fmt.Fprintf(stdout, "  %-12s %s\n", name, summary(p, used[[2]string{prog, name}]))
+			fmt.Fprintf(stdout, "  %-12s %s\n", name, summary(p, used[name]))
 		}
 	}
 	if shown == 0 {

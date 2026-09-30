@@ -2,21 +2,28 @@ package sandbox
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 // Args is bwrap's argument list, without argv[0].
 func (p *Plan) Args() []string {
-	args := append([]string(nil), p.Flags...)
+	return slices.Concat(p.ops(p.InfoFD, p.SeccompFD)...)
+}
+
+// ops is bwrap's argument list as one operation per entry, with the
+// descriptors that carry the info file and the seccomp filter.
+func (p *Plan) ops(infoFD, seccompFD int) [][]string {
+	ops := [][]string{p.Flags}
 	if p.Filter.Any() {
-		args = append(args, "--seccomp", strconv.Itoa(p.SeccompFD))
+		ops = append(ops, []string{"--seccomp", strconv.Itoa(seccompFD)})
 	}
 	for _, m := range p.Mounts {
-		args = append(args, m.args(p.InfoFD)...)
+		ops = append(ops, m.args(infoFD))
 	}
-	args = append(args, "--chdir", p.Chdir, "--")
-	return append(args, p.Command...)
+	ops = append(ops, []string{"--chdir", p.Chdir})
+	return append(ops, append([]string{"--"}, p.Command...))
 }
 
 func (m Mount) args(fd int) []string {
@@ -53,24 +60,15 @@ func (p *Plan) DryRun(bwrap string) string {
 	}
 	b.WriteString(" \\\n")
 	b.WriteString(Quote(bwrap))
-	line := func(words ...string) {
+	for _, op := range p.ops(DryRunInfoFD, DryRunSeccompFD) {
 		b.WriteString(" \\\n  ")
-		for i, w := range words {
+		for i, w := range op {
 			if i > 0 {
 				b.WriteByte(' ')
 			}
 			b.WriteString(Quote(w))
 		}
 	}
-	line(p.Flags...)
-	if p.Filter.Any() {
-		line("--seccomp", strconv.Itoa(DryRunSeccompFD))
-	}
-	for _, m := range p.Mounts {
-		line(m.args(DryRunInfoFD)...)
-	}
-	line("--chdir", p.Chdir)
-	line(append([]string{"--"}, p.Command...)...)
 	b.WriteString(" \\\n  " + strconv.Itoa(DryRunInfoFD) + "<<<")
 	b.WriteString(Quote(strings.TrimSuffix(string(p.Info), "\n")))
 	b.WriteByte('\n')

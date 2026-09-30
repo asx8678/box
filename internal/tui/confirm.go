@@ -2,7 +2,6 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // Confirm asks a yes/no question on one screen. No is the default: only an
@@ -17,21 +16,20 @@ func Confirm(title string, body []string, question string) (bool, error) {
 }
 
 type confirm struct {
+	page
 	title, question string
 	body            []string
 	onYes           bool // which button has the focus
 	yes             bool
-	width           int
-	hover           string
-	hits            *lipgloss.Compositor
 }
 
 func (m *confirm) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.page.update(msg) {
+		return m, nil
+	}
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "y", "Y":
@@ -45,18 +43,8 @@ func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.yes = m.onYes
 			return m, tea.Quit
 		}
-	case tea.BackgroundColorMsg:
-		applyTheme(msg.IsDark())
-	case tea.MouseMotionMsg:
-		m.hover = ""
-		if m.hits != nil {
-			m.hover = m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID()
-		}
 	case tea.MouseClickMsg:
-		if msg.Mouse().Button != tea.MouseLeft || m.hits == nil {
-			return m, nil
-		}
-		switch m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID() {
+		switch m.clicked(msg) {
 		case "yes":
 			m.yes = true
 			return m, tea.Quit
@@ -81,7 +69,5 @@ func (m *confirm) View() tea.View {
 	}
 	ls = append(ls, rightAlign(buttons, w), line{})
 	ls = append(ls, hints(w, "y", "yes", "n", "no", "←→", "switch", "enter", "press", "esc", "no")...)
-	var content string
-	content, m.hits = render(ls)
-	return screen(content, "box")
+	return m.draw(ls, "box")
 }

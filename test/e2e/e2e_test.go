@@ -7,6 +7,8 @@ package e2e
 
 import (
 	"bytes"
+	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,11 @@ import (
 var boxBin string
 
 func TestMain(m *testing.M) {
+	flag.Parse()
+	if testing.Short() {
+		fmt.Println("skipping the end-to-end tests: -short")
+		return
+	}
 	dir, err := os.MkdirTemp("", "box-e2e-bin")
 	if err != nil {
 		panic(err)

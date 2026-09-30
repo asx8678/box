@@ -60,7 +60,7 @@ type options struct {
 	edit                  bool
 }
 
-func parse(args []string, stderr io.Writer) (options, []string, error) {
+func parse(args []string) (options, []string, error) {
 	var o options
 	fs := flag.NewFlagSet("box", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -103,7 +103,7 @@ func parse(args []string, stderr io.Writer) (options, []string, error) {
 // Run executes box with args (without argv[0]) and returns the exit code.
 // On success it doesn't return: box is replaced by bwrap.
 func Run(args []string, stdout, stderr io.Writer) int {
-	o, rest, err := parse(args, stderr)
+	o, rest, err := parse(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "box: %v\n\n%s", err, usage)
 		return ExitBox
@@ -150,7 +150,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 type runner struct {
 	h       host.Host
 	dirs    profile.Dirs
-	o       options
 	prog    sandbox.Program
 	args    []string
 	wd      string // canonical working folder
@@ -159,11 +158,10 @@ type runner struct {
 	self    string
 	bwrap   string
 	network *bool
-	stderr  io.Writer
 }
 
 func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, stdout, stderr io.Writer) (int, error) {
-	r := &runner{h: h, dirs: dirs, o: o, args: args, stderr: stderr}
+	r := &runner{h: h, dirs: dirs, args: args}
 	wd, err := h.Getwd()
 	if err != nil {
 		return ExitBox, err
@@ -400,10 +398,7 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 
 // pick shows the profile picker with a one-line summary of each profile.
 func pick(dirs profile.Dirs, folders *profile.Folders, program string, names []string) (string, error) {
-	used := map[string]int{}
-	for _, progs := range folders.Entries {
-		used[progs[program]]++
-	}
+	used := folders.Uses(program)
 	var choices []tui.Choice
 	for _, n := range names {
 		detail := "error: can't read it"

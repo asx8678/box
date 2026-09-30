@@ -43,7 +43,6 @@ type Options struct {
 type Result struct {
 	Profile profile.Profile
 	Name    string
-	Saved   bool // false when cancelled
 }
 
 // ErrCancelled is returned by Edit when the user leaves without saving.
@@ -56,11 +55,10 @@ func Edit(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	r := final.(*editor).result
-	if !r.Saved {
-		return r, ErrCancelled
+	if r := final.(*editor).result; r != nil {
+		return *r, nil
 	}
-	return r, nil
+	return Result{}, ErrCancelled
 }
 
 type item struct {
@@ -77,6 +75,7 @@ type envItem struct {
 }
 
 type editor struct {
+	page
 	opts     Options
 	p        profile.Profile // settings the screen doesn't list item by item
 	baseline profile.Profile // what the screen started with, for "unsaved changes"
@@ -95,19 +94,15 @@ type editor struct {
 	armed    bool // Esc was pressed once with unsaved changes
 
 	preview   bool
-	pvFocus   string // "pv:back" or "pv:save"
+	pvSave    bool // the preview's focus is on Save & run, not Back
 	view      viewport.Model
-	width     int
-	height    int
-	top       int    // first body line on screen
-	lastFocus string // the focus at the last draw, to scroll it into view once
-	hover     string // the widget under the mouse
-	hits      *lipgloss.Compositor
-	result    Result
+	top       int     // first body line on screen
+	lastFocus string  // the focus at the last draw, to scroll it into view once
+	result    *Result // set when saved
 }
 
 func newEditor(opts Options) *editor {
-	e := &editor{opts: opts, p: opts.Profile, focus: "save", pvFocus: "pv:back"}
+	e := &editor{opts: opts, p: opts.Profile, focus: "save"}
 	for _, path := range opts.Profile.Home.RW {
 		e.items = append(e.items, item{path: path, rw: true, on: true})
 	}
@@ -325,7 +320,7 @@ func (e *editor) save() tea.Cmd {
 		e.preview = false
 		return nil
 	}
-	e.result = Result{Profile: p, Name: name, Saved: true}
+	e.result = &Result{Profile: p, Name: name}
 	return tea.Quit
 }
 
@@ -335,9 +330,9 @@ func (e *editor) openPreview() {
 		e.msg = err.Error()
 		return
 	}
-	e.view.SetContent(colorize(out))
+	e.view.SetContent(out)
 	e.view.GotoTop()
-	e.preview, e.pvFocus = true, "pv:back"
+	e.preview, e.pvSave = true, false
 }
 
 func (e *editor) openInput(kind string) tea.Cmd {
@@ -414,26 +409,22 @@ func (e *editor) submitInput() tea.Cmd {
 }
 
 func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		e.width, e.height = msg.Width, msg.Height
-		e.view.SetWidth(layoutWidth(e.width) - 2)
-		e.view.SetHeight(max(3, e.height-9))
-		e.input.SetWidth(layoutWidth(e.width) - 16)
-		return e, nil
-	case tea.BackgroundColorMsg:
-		applyTheme(msg.IsDark())
-		return e, nil
-	case tea.MouseMotionMsg:
-		e.hover = ""
-		if e.hits != nil {
-			e.hover = e.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID()
+	if e.page.update(msg) {
+		if _, ok := msg.(tea.WindowSizeMsg); ok {
+			e.view.SetWidth(layoutWidth(e.width) - 2)
+			e.view.SetHeight(max(3, e.height-9))
+			e.input.SetWidth(layoutWidth(e.width) - 16)
 		}
 		return e, nil
+	}
+	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		return e, e.key(msg)
 	case tea.MouseClickMsg:
-		return e, e.click(msg.Mouse())
+		if msg.Mouse().Button == tea.MouseLeft {
+			return e, e.click(e.hitID(msg.Mouse()))
+		}
+		return e, nil
 	case tea.MouseWheelMsg:
 		if e.preview {
 			var cmd tea.Cmd
@@ -474,13 +465,9 @@ func (e *editor) key(msg tea.KeyPressMsg) tea.Cmd {
 		case "ctrl+s":
 			return e.save()
 		case "tab", "shift+tab", "left", "right":
-			if e.pvFocus == "pv:back" {
-				e.pvFocus = "pv:save"
-			} else {
-				e.pvFocus = "pv:back"
-			}
+			e.pvSave = !e.pvSave
 		case "enter", "space":
-			if e.pvFocus == "pv:save" {
+			if e.pvSave {
 				return e.save()
 			}
 			e.preview = false
@@ -537,12 +524,9 @@ func (e *editor) key(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-func (e *editor) click(m tea.Mouse) tea.Cmd {
-	if m.Button != tea.MouseLeft || e.hits == nil {
-		return nil
-	}
+// click acts on a left click on the widget id ("" for empty space).
+func (e *editor) click(id string) tea.Cmd {
 	e.note = ""
-	id := e.hits.Hit(m.X, m.Y).ID()
 	if id != "cancel" {
 		e.armed = false
 	}
@@ -619,9 +603,7 @@ func (e *editor) View() tea.View {
 		}
 		all = append(body, footer...)
 	}
-	var content string
-	content, e.hits = render(all)
-	return screen(content, "box · "+e.opts.Profile.Program)
+	return e.draw(all, "box · "+e.opts.Profile.Program)
 }
 
 // ruleNote is the separator above the footer, with a scroll hint on it.
@@ -870,8 +852,8 @@ func (e *editor) inputBox(keys string, w int) []line {
 	return append(out, line{txt("     "), styled(styleDim, keys)})
 }
 
-// previewLines is the preview screen: the coloured command in a scrolling
-// pane, with Back and Save & run buttons.
+// previewLines is the preview screen: the command in a scrolling pane,
+// with Back and Save & run buttons.
 func (e *editor) previewLines(w int) []line {
 	ls := banner("Preview", line{styled(styleDim, "the exact command box will run · nothing has run yet")}, w)
 	for _, l := range strings.Split(e.view.View(), "\n") {
@@ -879,8 +861,8 @@ func (e *editor) previewLines(w int) []line {
 	}
 	pct := fmt.Sprintf("%3.0f%%", e.view.ScrollPercent()*100)
 	buttons := line{
-		seg{text: btn("Back", secondary, e.pvFocus == "pv:back", e.hover == "pv:back"), id: "pv:back"}, txt("  "),
-		seg{text: btn("▶ Save & run", primary, e.pvFocus == "pv:save", e.hover == "pv:save"), id: "pv:save"}, txt(" "),
+		seg{text: btn("Back", secondary, !e.pvSave, e.hover == "pv:back"), id: "pv:back"}, txt("  "),
+		seg{text: btn("▶ Save & run", primary, e.pvSave, e.hover == "pv:save"), id: "pv:save"}, txt(" "),
 	}
 	footer := []line{ruleNote(w, pct), line{}, rightAlign(buttons, w), line{}}
 	footer = append(footer, hints(w, "↑↓ pgup pgdn", "scroll", "tab", "switch button", "esc", "back", "ctrl+s", "save & run")...)
@@ -888,51 +870,4 @@ func (e *editor) previewLines(w int) []line {
 		ls = append(ls, line{})
 	}
 	return append(ls, footer...)
-}
-
-// colorize highlights a dry-run command for the preview: environment
-// variables, then bwrap's options, then the program itself.
-func colorize(dry string) string {
-	var out []string
-	inData := false
-	for _, raw := range strings.Split(dry, "\n") {
-		body, cont := strings.CutSuffix(raw, " \\")
-		lead := body[:len(body)-len(strings.TrimLeft(body, " "))]
-		t := strings.TrimLeft(body, " ")
-		var s string
-		switch {
-		case inData:
-			s = styleDim.Render(t)
-			inData = !strings.HasSuffix(t, "'")
-		case strings.HasPrefix(t, "#"):
-			s = styleFaint.Italic(true).Render(t)
-		case strings.HasPrefix(t, "env "):
-			s = styleBold.Render(t)
-		case strings.HasPrefix(t, "-- "):
-			cmd, args, _ := strings.Cut(strings.TrimPrefix(t, "-- "), " ")
-			s = styleAccent.Render("--") + " " + styleOK.Bold(true).Render(cmd)
-			if args != "" {
-				s += " " + args
-			}
-		case strings.HasPrefix(t, "--"):
-			flag, rest, _ := strings.Cut(t, " ")
-			s = styleSection.Render(flag)
-			if rest != "" {
-				s += " " + rest
-			}
-		case strings.Contains(t, "<<<"):
-			s = styleDim.Render(t)
-			inData = !strings.HasSuffix(t, "'") || strings.HasSuffix(t, "<<<'")
-		case strings.Contains(t, "=") && !strings.Contains(t, " "):
-			k, v, _ := strings.Cut(t, "=")
-			s = styleRO.Render(k) + styleFaint.Render("=") + v
-		default:
-			s = styleBold.Render(t)
-		}
-		if cont {
-			s += styleFaint.Render(" \\")
-		}
-		out = append(out, lead+s)
-	}
-	return strings.Join(out, "\n")
 }

@@ -333,7 +333,8 @@ func (b *builder) programDirs(dirs []string, wd, home string) error {
 		if err != nil {
 			return err
 		}
-		if profile.Within(c, wd) || b.readOnlyCovers(c) {
+		i := slices.IndexFunc(b.mounts, func(m Mount) bool { return m.Dest == c })
+		if profile.Within(c, wd) || b.readOnlyCovers(c, i) {
 			continue
 		}
 		if profile.Within(home, c) {
@@ -343,7 +344,7 @@ func (b *builder) programDirs(dirs []string, wd, home string) error {
 		if err := b.prot.CheckMount(b.h, c); err != nil {
 			return err
 		}
-		if i := slices.IndexFunc(b.mounts, func(m Mount) bool { return m.Dest == c }); i >= 0 {
+		if i >= 0 {
 			if b.mounts[i].Kind != Bind || b.mounts[i].Src != c {
 				return fmt.Errorf("the program's folder %s is a fresh, private folder inside the box; "+
 					"move the program somewhere else", c)
@@ -460,33 +461,42 @@ func (b *builder) pinParents() {
 	}
 }
 
-// rwParent returns the deepest same-path mount strictly containing dest, if
-// that mount is read-write.
+// rwParent returns the mount containing dest if it is a read-write bind
+// of the same host path, so a symlink or rename inside it reaches the host.
 func (b *builder) rwParent(dest string) (string, bool) {
-	best := -1
-	for i, m := range b.mounts {
-		if (m.Kind == ROBind || m.Kind == Bind) && m.Src == m.Dest && m.Dest != dest &&
-			profile.Within(dest, m.Dest) && (best < 0 || depth(m.Dest) > depth(b.mounts[best].Dest)) {
-			best = i
-		}
-	}
-	if best < 0 || b.mounts[best].Kind != Bind {
+	m, ok := covering(b.mounts, dest)
+	if !ok || m.Kind != Bind || m.Src != m.Dest {
 		return "", false
 	}
-	return b.mounts[best].Dest, true
+	return m.Dest, true
 }
 
-// readOnlyCovers reports whether the deepest same-path mount containing
-// dir is read-only, so dir is already read-only inside.
-func (b *builder) readOnlyCovers(dir string) bool {
+// readOnlyCovers reports whether dir is already read-only inside: the
+// mount at dir (index at, or -1), else the mount containing it, is a
+// read-only bind of the same host path.
+func (b *builder) readOnlyCovers(dir string, at int) bool {
+	m, ok := covering(b.mounts, dir)
+	if at >= 0 {
+		m, ok = b.mounts[at], true
+	}
+	return ok && m.Kind == ROBind && m.Src == m.Dest
+}
+
+// covering returns the deepest mount whose destination strictly contains
+// dest: the one dest lives in inside the sandbox. The fixed mounts (/proc,
+// /dev, /tmp, /run and the private home) are never contained by a bind of
+// a host path, so the answer is the deepest same-path bind when there is one.
+func covering(mounts []Mount, dest string) (Mount, bool) {
 	best := -1
-	for i, m := range b.mounts {
-		if (m.Kind == ROBind || m.Kind == Bind) && m.Src == m.Dest && profile.Within(dir, m.Dest) &&
-			(best < 0 || depth(m.Dest) >= depth(b.mounts[best].Dest)) {
+	for i, m := range mounts {
+		if m.Dest != dest && profile.Within(dest, m.Dest) && (best < 0 || depth(m.Dest) >= depth(mounts[best].Dest)) {
 			best = i
 		}
 	}
-	return best >= 0 && b.mounts[best].Kind == ROBind
+	if best < 0 {
+		return Mount{}, false
+	}
+	return mounts[best], true
 }
 
 // protectGit keeps .git/config and .git/hooks read-only in a read-write

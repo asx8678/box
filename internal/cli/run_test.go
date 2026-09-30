@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +11,7 @@ import (
 )
 
 func TestParse(t *testing.T) {
-	o, rest, err := parse([]string{"-p", "online", "--no-net", "kiro-cli", "-p", "x", "--net"}, io.Discard)
+	o, rest, err := parse([]string{"-p", "online", "--no-net", "kiro-cli", "-p", "x", "--net"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +29,7 @@ func TestParse(t *testing.T) {
 		{"-y", "x"},
 		{"-r", "-p", "a", "x"},
 	} {
-		if _, _, err := parse(bad, io.Discard); err == nil {
+		if _, _, err := parse(bad); err == nil {
 			t.Errorf("%q should be refused", bad)
 		}
 	}

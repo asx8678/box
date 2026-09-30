@@ -56,6 +56,17 @@ func (f *Folders) Set(folder, program, name string) {
 	f.Entries[folder][program] = name
 }
 
+// Uses counts, per profile name, the folders where program uses it.
+func (f *Folders) Uses(program string) map[string]int {
+	used := map[string]int{}
+	for _, progs := range f.Entries {
+		if name, ok := progs[program]; ok {
+			used[name]++
+		}
+	}
+	return used
+}
+
 // Forget drops program from every folder.
 func (f *Folders) Forget(program string) {
 	for folder, progs := range f.Entries {
@@ -72,5 +83,5 @@ func (f *Folders) Save() error {
 	if err := toml.NewEncoder(&buf).Encode(f); err != nil {
 		return err
 	}
-	return writeAtomic(f.path, buf.Bytes())
+	return WriteAtomic(f.path, buf.Bytes())
 }

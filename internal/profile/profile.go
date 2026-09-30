@@ -133,12 +133,13 @@ func Save(path string, p Profile) error {
 	if err := toml.NewEncoder(&buf).Encode(p); err != nil {
 		return err
 	}
-	return writeAtomic(path, buf.Bytes())
+	return WriteAtomic(path, buf.Bytes())
 }
 
-// writeAtomic writes data to a temporary file next to path and renames it
-// into place, so readers never see a half-written file.
-func writeAtomic(path string, data []byte) error {
+// WriteAtomic writes data with mode 0600 to a temporary file next to path
+// and renames it into place, so readers never see a half-written file. The
+// folder is created with mode 0700 if missing.
+func WriteAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -176,12 +177,14 @@ func checkOwner(path string) error {
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("%s: not a regular file", path)
 	}
-	return checkInfo(path, fi)
+	return checkPrivate(path, fi, 0o022, "writable by group or others (chmod go-w "+path+")")
 }
 
-func checkInfo(path string, fi fs.FileInfo) error {
-	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s: writable by group or others (chmod go-w %s)", path, path)
+// checkPrivate refuses path if it isn't owned by the user or has any of
+// the permission bits in mask set; problem says what the bits mean.
+func checkPrivate(path string, fi fs.FileInfo, mask fs.FileMode, problem string) error {
+	if fi.Mode().Perm()&mask != 0 {
+		return fmt.Errorf("%s: %s", path, problem)
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
 		return fmt.Errorf("%s: not owned by you", path)

@@ -14,7 +14,7 @@ Sep 30, 2026
 - Uses the programs already installed on the system; no images, no daemon.
 - Per-program profiles, created and edited in a TUI with mouse support, stored as readable TOML.
 - Safe by default: only the current folder is writable, the real home is hidden, the environment is wiped, it fails closed.
-- Small: about 1,500 lines of Go including the TUI.
+- Small: one static binary of about 5,000 lines of Go, a third of it the TUI.
 
 **Non-goals for v1**
 

@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/asx8678/box/internal/profile"
 )
 
 // trustedBwrap are the only places box takes bwrap from: a user folder on
@@ -100,18 +103,13 @@ func RunProbe(stateDir string, fresh bool) (Probe, error) {
 	p.Version = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(out)), "bubblewrap"))
 
 	var stderr bytes.Buffer
-	check := exec.Command(bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--", "/bin/true")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	check := exec.CommandContext(ctx, bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--", "/bin/true")
 	check.Env = []string{}
 	check.Stderr = &stderr
-	done := make(chan error, 1)
-	if err := check.Start(); err != nil {
-		return p, err
-	}
-	go func() { done <- check.Wait() }()
-	select {
-	case err = <-done:
-	case <-time.After(10 * time.Second):
-		check.Process.Kill()
+	check.WaitDelay = time.Second
+	if err = check.Run(); ctx.Err() != nil {
 		err = errors.New("timed out")
 	}
 	if err != nil {
@@ -123,12 +121,7 @@ func RunProbe(stateDir string, fresh bool) (Probe, error) {
 	}
 
 	if b, err := json.Marshal(probeCache{Key: key, Version: p.Version}); err == nil {
-		if os.MkdirAll(stateDir, 0o700) == nil {
-			tmp := cachePath + ".tmp"
-			if os.WriteFile(tmp, b, 0o600) == nil {
-				os.Rename(tmp, cachePath)
-			}
-		}
+		profile.WriteAtomic(cachePath, b) // a cache: failing to write it only costs time
 	}
 	return p, nil
 }

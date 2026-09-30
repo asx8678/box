@@ -153,25 +153,35 @@ func (p Protected) CheckMount(h host.Host, path string) error {
 // windowsUserPath reports whether path is /mnt/<drive>, /mnt/<drive>/Users
 // or /mnt/<drive>/Users/<name>: the equivalents of / and $HOME on Windows.
 func windowsUserPath(path string) bool {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 2 || parts[0] != "mnt" || !isDrive(parts[1]) {
+	parts, ok := driveParts(path)
+	switch {
+	case !ok:
 		return false
-	}
-	switch len(parts) {
-	case 2:
+	case len(parts) == 0:
 		return true
-	case 3, 4:
-		return strings.EqualFold(parts[2], "Users")
+	case len(parts) <= 2:
+		return strings.EqualFold(parts[0], "Users")
 	}
 	return false
 }
 
 func windowsAppData(path string) bool {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) >= 5 && parts[0] == "mnt" && isDrive(parts[1]) &&
-		strings.EqualFold(parts[2], "Users") && strings.EqualFold(parts[4], "AppData")
+	parts, ok := driveParts(path)
+	return ok && len(parts) >= 3 && strings.EqualFold(parts[0], "Users") && strings.EqualFold(parts[2], "AppData")
 }
 
-func isDrive(s string) bool {
-	return len(s) == 1 && s[0] >= 'a' && s[0] <= 'z'
+// WindowsDrive reports whether path is a Windows drive mounted by WSL,
+// /mnt/<letter>, or lies below one.
+func WindowsDrive(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) >= 2 && parts[0] == "mnt" && len(parts[1]) == 1 && parts[1][0] >= 'a' && parts[1][0] <= 'z'
+}
+
+// driveParts is the path below a Windows drive, split into its parts
+// (none for the drive itself), and false for a path that isn't on one.
+func driveParts(path string) ([]string, bool) {
+	if !WindowsDrive(path) {
+		return nil, false
+	}
+	return strings.Split(strings.Trim(path, "/"), "/")[2:], true
 }

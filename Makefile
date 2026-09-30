@@ -18,10 +18,12 @@ install: build
 	install -d $(PREFIX)/bin
 	install -m 755 bin/box $(PREFIX)/bin/box
 
+# The quick checks: -short skips the tests that build box and run it.
 test:
-	$(GO) test ./...
+	$(GO) test -short ./...
 
-# Run on the Linux/WSL machine: includes the end-to-end tests with real bwrap.
+# Everything, uncached; on Linux/WSL that includes the end-to-end tests
+# with real bwrap.
 test-linux:
 	$(GO) test -count=1 ./...
 

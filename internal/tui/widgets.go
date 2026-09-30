@@ -25,6 +25,58 @@ type seg struct {
 
 type line []seg
 
+// page is what every screen shares: the terminal's size and theme, and
+// the widget under the mouse, found through the compositor of the last draw.
+type page struct {
+	width, height int
+	hover         string
+	hits          *lipgloss.Compositor
+}
+
+// update handles the messages every screen answers the same way and
+// reports whether msg was one of them.
+func (p *page) update(msg tea.Msg) bool {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		p.width, p.height = msg.Width, msg.Height
+	case tea.BackgroundColorMsg:
+		applyTheme(msg.IsDark())
+	case tea.MouseMotionMsg:
+		p.hover = p.hitID(msg.Mouse())
+	default:
+		return false
+	}
+	return true
+}
+
+// hitID is the widget at a mouse position, or "" outside any.
+func (p *page) hitID(m tea.Mouse) string {
+	if p.hits == nil {
+		return ""
+	}
+	return p.hits.Hit(m.X, m.Y).ID()
+}
+
+// clicked is the widget under a left click, or "".
+func (p *page) clicked(msg tea.MouseClickMsg) string {
+	if msg.Mouse().Button != tea.MouseLeft {
+		return ""
+	}
+	return p.hitID(msg.Mouse())
+}
+
+// draw renders ls, records where every widget is, and returns it as a
+// full-screen view with the mouse enabled, motion included, for hover.
+func (p *page) draw(ls []line, title string) tea.View {
+	var content string
+	content, p.hits = render(ls)
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeAllMotion
+	v.WindowTitle = title
+	return v
+}
+
 // The look follows Claude Code: one warm accent for the brand, the focus
 // and the primary action, quiet grey for everything secondary, colour only
 // where it carries meaning. There are two palettes; applyTheme picks the
@@ -32,7 +84,7 @@ type line []seg
 var (
 	styleAccent, styleBrand, styleSection, styleBold, styleDim, styleFaint lipgloss.Style
 	styleError, styleWarn, styleOK, stylePlain, styleFocus, styleCheck     lipgloss.Style
-	styleRW, styleRO                                                       lipgloss.Style
+	styleRW                                                                lipgloss.Style
 
 	// Filled widgets: buttons, segmented toggles and pills.
 	btnNormal, btnHover, btnFocus                lipgloss.Style
@@ -65,7 +117,6 @@ func applyTheme(dark bool) {
 	styleWarn = fg("#E5B454", "#B7791F")
 	styleOK = fg("#4EBA65", "#2E8B4A")
 	styleRW = styleOK
-	styleRO = fg("#8FA6F9", "#3D5BD9")
 	styleCheck = styleOK.Bold(true)
 	styleBold = lipgloss.NewStyle().Bold(true)
 	stylePlain = lipgloss.NewStyle()
@@ -329,16 +380,6 @@ func render(lines []line) (string, *lipgloss.Compositor) {
 	return b.String(), lipgloss.NewCompositor(layers...)
 }
 
-// screen wraps content as a full-screen view with the mouse enabled,
-// motion included, for hover.
-func screen(content, title string) tea.View {
-	v := tea.NewView(content)
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeAllMotion
-	v.WindowTitle = title
-	return v
-}
-
 // banner is the orange header card: the ✻ box mark with a title, and an
 // optional second line of status.
 func banner(title string, sub line, w int) []line {
@@ -359,17 +400,14 @@ func chip(on bool, onText, offText string, onSt lipgloss.Style) []seg {
 
 // menu renders Claude Code-style numbered options: "❯ 1. label" for the
 // selected one, in the accent colour, and "  2. label" for the rest.
-func menu(labels, details []string, selected, hovered int, idPrefix string, w int) []line {
+func menu(labels, details []string, selected int, idPrefix string, w int) []line {
 	var out []line
 	digits := len(strconv.Itoa(len(labels)))
 	for i, label := range labels {
 		num := fmt.Sprintf("%*d. ", digits, i+1)
 		ptr, st := "   ", stylePlain
-		switch i {
-		case selected:
+		if i == selected {
 			ptr, st = " "+styleAccent.Render("❯")+" ", styleFocus
-		case hovered:
-			st = st.Underline(true)
 		}
 		row := line{txt(ptr), seg{text: st.Render(num + label), id: idPrefix + strconv.Itoa(i)}}
 		if i < len(details) && details[i] != "" {
