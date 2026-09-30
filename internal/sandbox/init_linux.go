@@ -26,7 +26,6 @@ func Init(argv []string) int {
 		return 125
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Args[0] = argv[0]
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	_, ttyErr := unix.IoctlGetTermios(0, unix.TCGETS)
 	tty := ttyErr == nil

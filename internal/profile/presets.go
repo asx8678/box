@@ -28,9 +28,3 @@ func Preset(program string) (Profile, error) {
 	}
 	return p, nil
 }
-
-// HasPreset reports whether program has an embedded preset.
-func HasPreset(program string) bool {
-	_, err := presets.ReadFile("presets/" + program + ".toml")
-	return err == nil
-}

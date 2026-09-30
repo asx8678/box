@@ -29,9 +29,10 @@ type Options struct {
 	EnvHints  []string // variable names to offer, unticked
 	// Exists reports whether a profile with this name is already saved.
 	Exists func(name string) bool
-	// CheckPath checks a folder about to be added: it exists and the
-	// safety rules allow it in this mode.
-	CheckPath func(path string, rw bool) error
+	// CheckPath checks a folder about to be ticked or added: the safety
+	// rules allow it in this mode, and it exists when mustExist is set
+	// (the program's own folders are created on first run; extra ones aren't).
+	CheckPath func(path string, rw, mustExist bool) error
 	// Plan validates the whole profile against the machine and returns
 	// the dry-run command to preview.
 	Plan func(p profile.Profile, name string) (string, error)
@@ -236,7 +237,7 @@ func (e *editor) activate(id string) tea.Cmd {
 		switch action {
 		case "on":
 			if !e.items[i].on {
-				if err := e.opts.CheckPath(e.items[i].path, e.items[i].rw); err != nil {
+				if err := e.opts.CheckPath(e.items[i].path, e.items[i].rw, e.items[i].extra); err != nil {
 					e.msg = err.Error()
 					return nil
 				}
@@ -244,7 +245,7 @@ func (e *editor) activate(id string) tea.Cmd {
 			e.items[i].on = !e.items[i].on
 		case "mode":
 			if e.items[i].on && !e.items[i].rw {
-				if err := e.opts.CheckPath(e.items[i].path, true); err != nil {
+				if err := e.opts.CheckPath(e.items[i].path, true, e.items[i].extra); err != nil {
 					e.msg = err.Error()
 					return nil
 				}
@@ -330,7 +331,7 @@ func (e *editor) refreshInput() {
 	e.input.SetSuggestions(dirSuggestions(raw, e.opts.Home))
 	e.inputErr = ""
 	if path := cleanInput(raw); path != "" && path != "~" && !strings.HasSuffix(raw, "/") {
-		if err := e.opts.CheckPath(path, false); err != nil {
+		if err := e.opts.CheckPath(path, false, true); err != nil {
 			e.inputErr = err.Error()
 		}
 	}
@@ -340,7 +341,7 @@ func (e *editor) submitInput() tea.Cmd {
 	switch e.inputKind {
 	case "folder":
 		path := cleanInput(e.input.Value())
-		if err := e.opts.CheckPath(path, false); err != nil {
+		if err := e.opts.CheckPath(path, false, true); err != nil {
 			e.inputErr = err.Error()
 			return nil
 		}
@@ -353,10 +354,8 @@ func (e *editor) submitInput() tea.Cmd {
 		e.items = append(e.items, item{path: path, on: true, extra: true})
 	case "env":
 		name := strings.TrimSpace(e.input.Value())
-		test := profile.Default("x")
-		test.Env.Pass = []string{name}
-		if err := test.Validate("x"); err != nil {
-			e.inputErr = strings.TrimPrefix(err.Error(), "env.pass: ")
+		if err := profile.CheckEnvName(name); err != nil {
+			e.inputErr = err.Error()
 			return nil
 		}
 		if slices.ContainsFunc(e.env, func(v envItem) bool { return v.name == name }) {
@@ -502,11 +501,7 @@ func (e *editor) View() tea.View {
 		}
 		content, e.hits = render(lines, e.top, height)
 	}
-	v := tea.NewView(content)
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle = "box · " + e.opts.Profile.Program
-	return v
+	return screen(content, "box · "+e.opts.Profile.Program)
 }
 
 // lines lays out the whole screen and says which line holds the focus.

@@ -107,10 +107,7 @@ func (m *picker) View() tea.View {
 		line{styled(styleDim, " ↑↓ move · Enter or click runs · 1–9 picks · Esc cancels")})
 	var content string
 	content, m.hits = render(ls, 0, 0)
-	v := tea.NewView(content)
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	return v
+	return screen(content, m.title)
 }
 
 // truncate cuts s to at most n runes.

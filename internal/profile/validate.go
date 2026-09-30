@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`)
+	nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._+-]{0,63}$`)
 	envRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
@@ -29,9 +29,23 @@ var reservedEnv = map[string]bool{
 }
 
 // ValidName reports whether s can be a program or profile name: letters,
-// digits, '.', '_' and '-', not starting with a dot or dash.
+// digits, '.', '_', '+' and '-', not starting with a dot, plus or dash.
 func ValidName(s string) bool {
 	return nameRE.MatchString(s)
+}
+
+// CheckEnvName says why variable k can't be passed to or set for a
+// program, or returns nil if it can.
+func CheckEnvName(k string) error {
+	switch {
+	case !envRE.MatchString(k):
+		return fmt.Errorf("%q is not a variable name", k)
+	case deniedEnv[k]:
+		return fmt.Errorf("%s would give the program a way out of the box", k)
+	case reservedEnv[k]:
+		return fmt.Errorf("%s is set by box", k)
+	}
+	return nil
 }
 
 // Validate checks the profile on its own, without looking at the machine.
@@ -79,23 +93,13 @@ func (p Profile) Validate(program string) error {
 	checkPaths("system.extra_ro", p.System.ExtraRO)
 
 	for _, k := range p.Env.Pass {
-		switch {
-		case !envRE.MatchString(k):
-			add("env.pass: %q is not a variable name", k)
-		case deniedEnv[k]:
-			add("env.pass: %s would give the program a way out of the box", k)
-		case reservedEnv[k]:
-			add("env.pass: %s is set by box", k)
+		if err := CheckEnvName(k); err != nil {
+			add("env.pass: %v", err)
 		}
 	}
 	for k := range p.Env.Set {
-		switch {
-		case !envRE.MatchString(k):
-			add("env.set: %q is not a variable name", k)
-		case deniedEnv[k]:
-			add("env.set: %s would give the program a way out of the box", k)
-		case reservedEnv[k]:
-			add("env.set: %s is set by box", k)
+		if err := CheckEnvName(k); err != nil {
+			add("env.set: %v", err)
 		}
 	}
 	return errors.Join(errs...)

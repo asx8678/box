@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -115,4 +116,13 @@ func render(lines []line, top, height int) (string, *lipgloss.Compositor) {
 		}
 	}
 	return b.String(), lipgloss.NewCompositor(layers...)
+}
+
+// screen wraps content as a full-screen view with mouse clicks enabled.
+func screen(content, title string) tea.View {
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	v.WindowTitle = title
+	return v
 }

@@ -75,8 +75,5 @@ func (m *confirm) View() tea.View {
 		line{styled(styleDim, " y / n · ←→ and Enter · click · Esc means no")})
 	var content string
 	content, m.hits = render(ls, 0, 0)
-	v := tea.NewView(content)
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	return v
+	return screen(content, m.title)
 }

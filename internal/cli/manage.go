@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,11 +33,7 @@ func ask(title string, body []string, question string) bool {
 // list prints every program with its profiles and a one-line summary.
 func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 	entries, err := os.ReadDir(filepath.Join(dirs.Config, "profiles"))
-	if os.IsNotExist(err) || (err == nil && len(entries) == 0) {
-		fmt.Fprintln(stdout, "no profiles yet; box <program> creates one")
-		return 0
-	}
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return fail(stderr, err)
 	}
 	folders, err := profile.LoadFolders(profile.FoldersPath(dirs))
@@ -56,12 +53,13 @@ func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 		}
 	}
 	sort.Strings(programs)
-	code := 0
+	code, shown := 0, 0
 	for _, prog := range programs {
 		names, err := profile.List(dirs, prog)
 		if err != nil || len(names) == 0 {
 			continue
 		}
+		shown++
 		fmt.Fprintln(stdout, prog)
 		for _, name := range names {
 			p, err := profile.Load(profile.Path(dirs, prog, name), prog)
@@ -72,6 +70,9 @@ func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 			}
 			fmt.Fprintf(stdout, "  %-12s %s\n", name, summary(p, used[[2]string{prog, name}]))
 		}
+	}
+	if shown == 0 {
+		fmt.Fprintln(stdout, "no profiles yet; box <program> creates one")
 	}
 	return code
 }
@@ -173,7 +174,7 @@ func reset(dirs profile.Dirs, program string, yes bool, stdout, stderr io.Writer
 	if homeErr == nil {
 		body := []string{homes, "They hold login state, caches and unpacked apps. This can't be undone."}
 		if !yes && ask(title, body, "Also delete the private home folders?") {
-			if err := os.RemoveAll(homes); err != nil {
+			if err := removeAll(homes); err != nil {
 				return fail(stderr, err)
 			}
 			fmt.Fprintln(stdout, "deleted", homes)
@@ -182,4 +183,19 @@ func reset(dirs profile.Dirs, program string, yes bool, stdout, stderr io.Writer
 		}
 	}
 	return 0
+}
+
+// removeAll deletes path even when it holds read-only folders, such as Go's
+// module cache, whose contents os.RemoveAll alone can't delete.
+func removeAll(path string) error {
+	if os.RemoveAll(path) == nil {
+		return nil
+	}
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if d != nil && d.IsDir() {
+			os.Chmod(p, 0o700) // before WalkDir reads it
+		}
+		return nil
+	})
+	return os.RemoveAll(path)
 }

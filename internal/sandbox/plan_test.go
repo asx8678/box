@@ -366,3 +366,14 @@ func TestQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestProgramDirectlyInHomeIsRefused(t *testing.T) {
+	f := machine()
+	for _, dir := range []string{"/home/u", "/home"} {
+		in := input(t, f, profile.Default("mytool"))
+		in.ProgramDirs = []string{dir}
+		if _, err := Build(f, in); err == nil || !strings.Contains(err.Error(), "whole home folder") {
+			t.Errorf("%s: got %v", dir, err)
+		}
+	}
+}

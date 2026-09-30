@@ -94,3 +94,26 @@ func TestResetNeedsConfirmationWithoutTerminal(t *testing.T) {
 		t.Error("nothing may be deleted without confirmation")
 	}
 }
+
+func TestRemoveAllHandlesReadOnlyFolders(t *testing.T) {
+	root := t.TempDir()
+	mod := filepath.Join(root, "home/go/pkg/mod/example.com/x@v1")
+	os.MkdirAll(mod, 0o755)
+	os.WriteFile(filepath.Join(mod, "go.mod"), []byte("module x"), 0o444)
+	os.Chmod(mod, 0o555) // as Go leaves its module cache
+	if err := removeAll(filepath.Join(root, "home")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "home")); !os.IsNotExist(err) {
+		t.Errorf("still there: %v", err)
+	}
+}
+
+func TestListWithEmptyProgramFolder(t *testing.T) {
+	d := tempDirs(t)
+	os.MkdirAll(filepath.Join(d.Config, "profiles", "ghost"), 0o700)
+	var out, errb bytes.Buffer
+	if code := list(d, &out, &errb); code != 0 || !strings.Contains(out.String(), "no profiles yet") {
+		t.Errorf("exit %d: %q", code, out.String())
+	}
+}

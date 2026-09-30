@@ -139,31 +139,8 @@ func Build(h host.Host, in Input) (*Plan, error) {
 	}
 	home := in.Dirs.Home
 	b := &builder{h: h, prot: in.Protected}
-
-	// System: read-only, as on the host.
-	b.add(ROBind, "/usr", "/usr")
-	for _, dir := range usrMerged {
-		fi, err := h.Lstat(dir)
-		switch {
-		case err != nil:
-			// Not on this machine.
-		case fi.Mode()&fs.ModeSymlink != 0:
-			target, err := h.Readlink(dir)
-			if err != nil {
-				return nil, err
-			}
-			b.add(Symlink, target, dir)
-		case fi.IsDir():
-			b.add(ROBind, dir, dir)
-		}
-	}
-	for _, f := range systemFiles {
-		b.add(ROBindTry, f, f)
-	}
-	for _, raw := range p.System.ExtraRO {
-		if err := b.hostPath("system.extra_ro", raw, home, ROBind, true); err != nil {
-			return nil, err
-		}
+	if err := b.system(); err != nil {
+		return nil, err
 	}
 
 	// Fresh, empty filesystems owned by the sandbox.
@@ -173,7 +150,8 @@ func Build(h host.Host, in Input) (*Plan, error) {
 	b.add(Tmpfs, "", "/run")
 	b.add(ROBindData, "", "/run/box/profile")
 
-	// The private home, then the program's own folders on top of it.
+	// The private home, then the folders the profile lists (the program's
+	// own folders on top of the private home, created if missing).
 	privateHome, err := profile.Canonical(h, profile.HomeDir(in.Dirs, p.Program, in.ProfileName))
 	if err != nil {
 		return nil, err
@@ -182,74 +160,43 @@ func Build(h host.Host, in Input) (*Plan, error) {
 	if _, err := h.Stat(privateHome); err != nil {
 		b.create = append(b.create, privateHome)
 	}
-	for _, raw := range p.Home.RW {
-		if err := b.hostPath("home.rw", raw, home, Bind, false); err != nil {
-			return nil, err
-		}
-	}
-	for _, raw := range p.Home.RO {
-		if err := b.hostPath("home.ro", raw, home, ROBind, false); err != nil {
-			return nil, err
-		}
-	}
-
-	for _, raw := range p.Extra.RW {
-		if err := b.hostPath("extra.rw", raw, home, Bind, true); err != nil {
-			return nil, err
-		}
-	}
-	for _, raw := range p.Extra.RO {
-		if err := b.hostPath("extra.ro", raw, home, ROBind, true); err != nil {
-			return nil, err
-		}
-	}
-
-	// The project folder.
-	wd, err := profile.Canonical(h, in.Workdir)
-	if err != nil {
-		return nil, err
-	}
-	if err := b.prot.CheckWorkdir(wd); err != nil {
-		return nil, err
-	}
-	if err := b.prot.CheckMount(h, wd); err != nil {
-		return nil, err
-	}
-	if p.Workdir.Mode == "rw" {
-		if err := b.prot.CheckRW(wd); err != nil {
-			return nil, err
-		}
-		b.add(Bind, wd, wd)
-		if p.Workdir.ProtectGit {
-			if err := b.protectGit(wd); err != nil {
+	for _, l := range []struct {
+		section   string
+		paths     []string
+		kind      Kind
+		mustExist bool
+	}{
+		{"system.extra_ro", p.System.ExtraRO, ROBind, true},
+		{"home.rw", p.Home.RW, Bind, false},
+		{"home.ro", p.Home.RO, ROBind, false},
+		{"extra.rw", p.Extra.RW, Bind, true},
+		{"extra.ro", p.Extra.RO, ROBind, true},
+	} {
+		for _, raw := range l.paths {
+			if err := b.hostPath(l.section, raw, home, l.kind, l.mustExist); err != nil {
 				return nil, err
 			}
 		}
-	} else {
-		b.add(ROBind, wd, wd)
 	}
 
-	// The program's own folders, and those of the tools it runs, are always
-	// read-only: a program that can rewrite itself changes what runs
-	// outside the box next time. Only folders inside the project keep the
-	// project's mode. A read-write folder that is exactly a program folder
-	// becomes read-only; one that contains it gets a read-only mount on top.
-	for _, dir := range in.ProgramDirs {
-		c, err := profile.Canonical(h, dir)
+	wd, err := b.workdir(in.Workdir, p.Workdir)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.programDirs(in.ProgramDirs, wd, home); err != nil {
+		return nil, err
+	}
+	command := append([]string{in.Program}, in.Args...)
+	if p.Sandbox.Init {
+		if in.Self == "" {
+			return nil, errors.New("sandbox.init needs box's own path")
+		}
+		self, err := profile.Canonical(h, in.Self)
 		if err != nil {
 			return nil, err
 		}
-		if profile.Within(c, wd) || b.readOnlyCovers(c) {
-			continue
-		}
-		if err := b.prot.CheckMount(h, c); err != nil {
-			return nil, err
-		}
-		if i := slices.IndexFunc(b.mounts, func(m Mount) bool { return m.Dest == c }); i >= 0 {
-			b.mounts[i].Kind = ROBind
-			continue
-		}
-		b.add(ROBind, c, c)
+		b.add(ROBind, self, InitPath)
+		command = append([]string{InitPath, "--box-init", "--"}, command...)
 	}
 
 	// Parents mount before children, so nothing is hidden by a later,
@@ -265,60 +212,47 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		seen[m.Dest] = true
 	}
 
-	if p.Sandbox.Init {
-		if in.Self == "" {
-			return nil, errors.New("sandbox.init needs box's own path")
-		}
-		self, err := profile.Canonical(h, in.Self)
-		if err != nil {
-			return nil, err
-		}
-		b.add(ROBind, self, InitPath)
-		sort.SliceStable(b.mounts, func(i, j int) bool {
-			return depth(b.mounts[i].Dest) < depth(b.mounts[j].Dest)
-		})
-	}
-
 	network := p.Network
 	if in.Network != nil {
 		network = *in.Network
 	}
 	plan := &Plan{
-		Mounts:  b.mounts,
-		Chdir:   wd,
-		Command: append([]string{in.Program}, in.Args...),
-		InfoFD:  DryRunInfoFD,
-		Create:  b.create,
+		Mounts:   b.mounts,
+		Chdir:    wd,
+		Command:  command,
+		InfoFD:   DryRunInfoFD,
+		Create:   b.create,
+		Landlock: p.Sandbox.Landlock && network,
 	}
-	if p.Sandbox.Init {
-		plan.Command = append([]string{InitPath, "--box-init", "--", in.Program}, in.Args...)
-	}
+	plan.flags(in, network)
+	plan.Env = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), in.ProgramEnv)
+	plan.Info = fmt.Appendf(nil, "program=%s\nprofile=%s\nnetwork=%t\nworkdir=%s\n",
+		p.Program, in.ProfileName, network, wd)
+	return plan, nil
+}
+
+// flags sets bwrap's namespace and process options. Terminal injection is
+// blocked by the kernel, or else by the seccomp filter, or as a last resort
+// by detaching from the terminal; on WSL the filter also closes the VM's
+// sockets to the Windows host.
+func (plan *Plan) flags(in Input, network bool) {
 	plan.Flags = []string{"--unshare-all"}
 	if network {
 		plan.Flags = append(plan.Flags, "--share-net")
 	}
 	plan.Flags = append(plan.Flags, "--die-with-parent")
-	// Terminal injection: blocked by the kernel, or else by the filter,
-	// or as a last resort by detaching from the terminal. On WSL the
-	// filter also closes the VM's sockets to the Windows host.
 	filter := Filter{TIOCSTI: in.LegacyTIOCSTI != "0", Vsock: in.Protected.WSL}
-	if filter.Any() {
-		if SeccompSupported(in.Arch) {
-			plan.Filter = filter
-			plan.SeccompFD = DryRunSeccompFD
-		} else if filter.TIOCSTI {
-			plan.Flags = append(plan.Flags, "--new-session")
-			plan.NewSession = true
-		}
+	switch {
+	case filter.Any() && SeccompSupported(in.Arch):
+		plan.Filter = filter
+		plan.SeccompFD = DryRunSeccompFD
+	case filter.TIOCSTI:
+		plan.Flags = append(plan.Flags, "--new-session")
+		plan.NewSession = true
 	}
-	plan.Landlock = p.Sandbox.Landlock && network
-	if p.Sandbox.Strict {
+	if in.Profile.Sandbox.Strict {
 		plan.Flags = append(plan.Flags, "--disable-userns")
 	}
-	plan.Env = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), in.ProgramEnv)
-	plan.Info = fmt.Appendf(nil, "program=%s\nprofile=%s\nnetwork=%t\nworkdir=%s\n",
-		p.Program, in.ProfileName, network, wd)
-	return plan, nil
 }
 
 type builder struct {
@@ -330,6 +264,87 @@ type builder struct {
 
 func (b *builder) add(k Kind, src, dest string) {
 	b.mounts = append(b.mounts, Mount{Kind: k, Src: src, Dest: dest})
+}
+
+// system mounts /usr and the system files read-only, as on the host.
+func (b *builder) system() error {
+	b.add(ROBind, "/usr", "/usr")
+	for _, dir := range usrMerged {
+		fi, err := b.h.Lstat(dir)
+		switch {
+		case err != nil:
+			// Not on this machine.
+		case fi.Mode()&fs.ModeSymlink != 0:
+			target, err := b.h.Readlink(dir)
+			if err != nil {
+				return err
+			}
+			b.add(Symlink, target, dir)
+		case fi.IsDir():
+			b.add(ROBind, dir, dir)
+		}
+	}
+	for _, f := range systemFiles {
+		b.add(ROBindTry, f, f)
+	}
+	return nil
+}
+
+// workdir mounts the project folder, keeping .git/config and .git/hooks
+// read-only in a read-write project when the profile asks.
+func (b *builder) workdir(dir string, w profile.Workdir) (string, error) {
+	wd, err := profile.Canonical(b.h, dir)
+	if err != nil {
+		return "", err
+	}
+	if err := b.prot.CheckWorkdir(wd); err != nil {
+		return "", err
+	}
+	if err := b.prot.CheckMount(b.h, wd); err != nil {
+		return "", err
+	}
+	if w.Mode != "rw" {
+		b.add(ROBind, wd, wd)
+		return wd, nil
+	}
+	if err := b.prot.CheckRW(wd); err != nil {
+		return "", err
+	}
+	b.add(Bind, wd, wd)
+	if w.ProtectGit {
+		return wd, b.protectGit(wd)
+	}
+	return wd, nil
+}
+
+// programDirs mounts the program's own folders, and those of the tools it
+// runs, always read-only: a program that can rewrite itself changes what
+// runs outside the box next time. Folders inside the project keep the
+// project's mode. A read-write folder that is exactly a program folder
+// becomes read-only; one that contains it gets a read-only mount on top.
+func (b *builder) programDirs(dirs []string, wd, home string) error {
+	for _, dir := range dirs {
+		c, err := profile.Canonical(b.h, dir)
+		if err != nil {
+			return err
+		}
+		if profile.Within(c, wd) || b.readOnlyCovers(c) {
+			continue
+		}
+		if profile.Within(home, c) {
+			return fmt.Errorf("the program's folder %s would expose your whole home folder; "+
+				"move the program into a folder of its own, such as ~/.local/bin", c)
+		}
+		if err := b.prot.CheckMount(b.h, c); err != nil {
+			return err
+		}
+		if i := slices.IndexFunc(b.mounts, func(m Mount) bool { return m.Dest == c }); i >= 0 {
+			b.mounts[i].Kind = ROBind
+			continue
+		}
+		b.add(ROBind, c, c)
+	}
+	return nil
 }
 
 // hostPath adds a profile-configured host path, mounted at the same place

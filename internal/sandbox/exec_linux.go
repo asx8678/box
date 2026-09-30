@@ -54,9 +54,12 @@ type probeKey struct {
 	Boot   string `json:"boot"`
 }
 
+// probeCache remembers the one slow result, a working namespace check, and
+// bwrap's version. The kernel switches are cheap and read on every run, so
+// a sysctl changed since the last check is never missed.
 type probeCache struct {
-	Key   probeKey `json:"key"`
-	Probe Probe    `json:"probe"`
+	Key     probeKey `json:"key"`
+	Version string   `json:"version"`
 }
 
 // RunProbe checks that bwrap exists, is trusted and can create namespaces
@@ -66,7 +69,6 @@ type probeCache struct {
 func RunProbe(stateDir string, fresh bool) (Probe, error) {
 	var p Probe
 	if _, err := os.Stat("/run/box/profile"); err == nil {
-		p.Nested = true
 		return p, errors.New("already inside box: box can't run inside itself")
 	}
 	bwrap, fi, err := findBwrap()
@@ -86,8 +88,8 @@ func RunProbe(stateDir string, fresh bool) (Probe, error) {
 	if !fresh {
 		var c probeCache
 		if b, err := os.ReadFile(cachePath); err == nil && json.Unmarshal(b, &c) == nil && c.Key == key {
-			c.Probe.Cached = true
-			return c.Probe, nil
+			p.Version = c.Version
+			return p, nil
 		}
 	}
 
@@ -120,7 +122,7 @@ func RunProbe(stateDir string, fresh bool) (Probe, error) {
 		return p, fmt.Errorf("bwrap can't create a sandbox here: %v %s", err, msg)
 	}
 
-	if b, err := json.Marshal(probeCache{Key: key, Probe: p}); err == nil {
+	if b, err := json.Marshal(probeCache{Key: key, Version: p.Version}); err == nil {
 		if os.MkdirAll(stateDir, 0o700) == nil {
 			tmp := cachePath + ".tmp"
 			if os.WriteFile(tmp, b, 0o600) == nil {
@@ -129,6 +131,26 @@ func RunProbe(stateDir string, fresh bool) (Probe, error) {
 		}
 	}
 	return p, nil
+}
+
+// hint turns bwrap's error text from the namespace check into a fix.
+func hint(stderr string, p Probe) string {
+	switch {
+	case strings.Contains(stderr, "setting up uid map: Permission denied"),
+		strings.Contains(stderr, "Failed RTM_NEWADDR"):
+		if p.AppArmorUserns == "1" {
+			return "Ubuntu's AppArmor blocks user namespaces for bwrap. Either load the bwrap profile " +
+				"(sudo apt install apparmor-profiles; sudo ln -s /usr/share/apparmor/extra-profiles/bwrap-userns-restrict " +
+				"/etc/apparmor.d/ && sudo systemctl reload apparmor) or allow them for everyone: " +
+				"sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
+		}
+		return "the kernel refused to map your user into a new namespace"
+	case strings.Contains(stderr, "No permissions to create new namespace"),
+		strings.Contains(stderr, "Creating new namespace failed"):
+		return "unprivileged user namespaces are disabled; check sysctl user.max_user_namespaces " +
+			"(and kernel.unprivileged_userns_clone on older Debian)"
+	}
+	return ""
 }
 
 // memfd returns an inheritable in-memory file holding data, at offset 0.

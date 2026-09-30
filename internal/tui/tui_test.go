@@ -50,11 +50,11 @@ func newTestEditor(t *testing.T) *editor {
 		Suggested: []string{"~/.cache/tool"},
 		EnvHints:  []string{"AWS_PROFILE"},
 		Exists:    func(name string) bool { return name == "taken" },
-		CheckPath: func(path string, rw bool) error {
+		CheckPath: func(path string, rw, mustExist bool) error {
 			if strings.Contains(path, "ssh") {
 				return errors.New("refused: " + path)
 			}
-			if path == "~/missing" {
+			if path == "~/missing" && mustExist {
 				return errors.New("~/missing doesn't exist")
 			}
 			return nil
@@ -252,3 +252,13 @@ func TestDirSuggestions(t *testing.T) {
 }
 
 func mkdir(p string) error { return os.Mkdir(p, 0o755) }
+
+func TestEditorRetickFolderCreatedOnFirstRun(t *testing.T) {
+	e := newTestEditor(t)
+	e.items = append(e.items, item{path: "~/missing", rw: true, on: true})
+	clickOn(t, e, e.hitsFn(), "f:2:on") // untick
+	clickOn(t, e, e.hitsFn(), "f:2:on") // tick again: a program folder may not exist yet
+	if !e.items[2].on {
+		t.Errorf("couldn't re-tick a program folder that doesn't exist yet: %q", e.msg)
+	}
+}

@@ -106,12 +106,12 @@ func TestValidate(t *testing.T) {
 }
 
 func TestValidName(t *testing.T) {
-	for _, s := range []string{"kiro-cli", "my_agent", "a.b", "x1"} {
+	for _, s := range []string{"kiro-cli", "my_agent", "a.b", "x1", "g++"} {
 		if !ValidName(s) {
 			t.Errorf("%q should be valid", s)
 		}
 	}
-	for _, s := range []string{"", ".hidden", "-x", "a/b", "..", "a b", strings.Repeat("a", 65)} {
+	for _, s := range []string{"", ".hidden", "-x", "+x", "a/b", "..", "a b", strings.Repeat("a", 65)} {
 		if ValidName(s) {
 			t.Errorf("%q should be invalid", s)
 		}
