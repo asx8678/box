@@ -5,6 +5,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -76,30 +77,37 @@ type envItem struct {
 }
 
 type editor struct {
-	opts  Options
-	p     profile.Profile // settings the screen doesn't list item by item
-	items []item
-	env   []envItem
-	focus string
+	opts     Options
+	p        profile.Profile // settings the screen doesn't list item by item
+	baseline profile.Profile // what the screen started with, for "unsaved changes"
+	items    []item
+	env      []envItem
+	focus    string
 
 	name      textinput.Model
 	input     textinput.Model // the add-folder or add-variable input
 	inputKind string          // "", "folder" or "env"
 	inputErr  string
-	msg       string // why Save or Preview failed
 
-	preview bool
-	view    viewport.Model
+	msg      string // why Save or Preview failed
+	note     string // a passing confirmation or warning, cleared by the next key
+	noteWarn bool
+	armed    bool // Esc was pressed once with unsaved changes
 
-	width, height int
-	top           int
-	hover         string // the widget under the mouse
-	hits          *lipgloss.Compositor
-	result        Result
+	preview   bool
+	pvFocus   string // "pv:back" or "pv:save"
+	view      viewport.Model
+	width     int
+	height    int
+	top       int    // first body line on screen
+	lastFocus string // the focus at the last draw, to scroll it into view once
+	hover     string // the widget under the mouse
+	hits      *lipgloss.Compositor
+	result    Result
 }
 
 func newEditor(opts Options) *editor {
-	e := &editor{opts: opts, p: opts.Profile, focus: "save", width: 80}
+	e := &editor{opts: opts, p: opts.Profile, focus: "save", pvFocus: "pv:back"}
 	for _, path := range opts.Profile.Home.RW {
 		e.items = append(e.items, item{path: path, rw: true, on: true})
 	}
@@ -126,12 +134,14 @@ func newEditor(opts Options) *editor {
 	e.name = textinput.New()
 	e.name.Prompt = ""
 	e.name.CharLimit = 64
-	e.name.SetWidth(16)
+	e.name.SetWidth(32)
 	e.name.SetValue(opts.Name)
 	e.input = textinput.New()
 	e.input.Prompt = ""
 	e.input.ShowSuggestions = true
 	e.view = viewport.New()
+	e.view.SoftWrap = true
+	e.baseline = e.build()
 	return e
 }
 
@@ -165,6 +175,11 @@ func (e *editor) build() profile.Profile {
 	return p
 }
 
+// dirty reports unsaved changes.
+func (e *editor) dirty() bool {
+	return !reflect.DeepEqual(e.build(), e.baseline) || strings.TrimSpace(e.name.Value()) != e.opts.Name
+}
+
 // ids is the keyboard focus order: the widgets in the order they're drawn.
 func (e *editor) ids() []string {
 	ids := []string{"wd:rw", "wd:ro", "net:off", "net:on"}
@@ -185,7 +200,7 @@ func (e *editor) ids() []string {
 	for i := range e.env {
 		ids = append(ids, fmt.Sprintf("e:%d", i))
 	}
-	return append(ids, "add:env", "name", "save", "preview", "cancel")
+	return append(ids, "add:env", "name", "preview", "cancel", "save")
 }
 
 func (e *editor) move(delta int) tea.Cmd {
@@ -205,6 +220,10 @@ func (e *editor) setFocus(id string) tea.Cmd {
 	}
 	e.name.Blur()
 	return nil
+}
+
+func (e *editor) setNote(warn bool, format string, a ...any) {
+	e.note, e.noteWarn = fmt.Sprintf(format, a...), warn
 }
 
 // parseID splits "f:3:mode" into its kind, index and action.
@@ -236,24 +255,26 @@ func (e *editor) activate(id string) tea.Cmd {
 		if i >= len(e.items) {
 			return nil
 		}
+		it := &e.items[i]
 		switch action {
 		case "on":
-			if !e.items[i].on {
-				if err := e.opts.CheckPath(e.items[i].path, e.items[i].rw, e.items[i].extra); err != nil {
+			if !it.on {
+				if err := e.opts.CheckPath(it.path, it.rw, it.extra); err != nil {
 					e.msg = err.Error()
 					return nil
 				}
 			}
-			e.items[i].on = !e.items[i].on
+			it.on = !it.on
 		case "mode":
-			if e.items[i].on && !e.items[i].rw {
-				if err := e.opts.CheckPath(e.items[i].path, true, e.items[i].extra); err != nil {
+			if it.on && !it.rw {
+				if err := e.opts.CheckPath(it.path, true, it.extra); err != nil {
 					e.msg = err.Error()
 					return nil
 				}
 			}
-			e.items[i].rw = !e.items[i].rw
+			it.rw = !it.rw
 		case "rm":
+			e.setNote(false, "Removed %s", it.path)
 			e.items = slices.Delete(e.items, i, i+1)
 			e.focus = "add:folder"
 		}
@@ -266,39 +287,57 @@ func (e *editor) activate(id string) tea.Cmd {
 	case "name":
 		return e.setFocus("name")
 	case "preview":
-		out, err := e.opts.Plan(e.build(), strings.TrimSpace(e.name.Value()))
-		if err != nil {
-			e.msg = err.Error()
-			return nil
-		}
-		e.view.SetContent(out)
-		e.view.GotoTop()
-		e.preview = true
+		e.openPreview()
 	case "cancel":
-		return tea.Quit
+		return e.cancel()
 	case "save":
 		return e.save()
 	}
 	return nil
 }
 
+// cancel leaves without saving; with unsaved changes it asks first, by
+// wanting a second Esc or Cancel.
+func (e *editor) cancel() tea.Cmd {
+	if e.dirty() && !e.armed {
+		e.armed = true
+		e.setNote(true, "You have unsaved changes. Press esc or Cancel again to discard them, or ctrl+s to save.")
+		return nil
+	}
+	return tea.Quit
+}
+
 func (e *editor) save() tea.Cmd {
 	name := strings.TrimSpace(e.name.Value())
 	if !profile.ValidName(name) {
-		e.msg = fmt.Sprintf("profile name %q: use letters, digits, '.', '_' and '-'", name)
+		e.msg = fmt.Sprintf("Profile name %q: use letters, digits, '.', '_', '+' and '-'.", name)
+		e.preview = false
 		return e.setFocus("name")
 	}
 	if (e.opts.New || name != e.opts.Name) && e.opts.Exists(name) {
-		e.msg = fmt.Sprintf("a profile called %q already exists", name)
+		e.msg = fmt.Sprintf("A profile called %q already exists; choose another name.", name)
+		e.preview = false
 		return e.setFocus("name")
 	}
 	p := e.build()
 	if _, err := e.opts.Plan(p, name); err != nil {
 		e.msg = err.Error()
+		e.preview = false
 		return nil
 	}
 	e.result = Result{Profile: p, Name: name, Saved: true}
 	return tea.Quit
+}
+
+func (e *editor) openPreview() {
+	out, err := e.opts.Plan(e.build(), strings.TrimSpace(e.name.Value()))
+	if err != nil {
+		e.msg = err.Error()
+		return
+	}
+	e.view.SetContent(colorize(out))
+	e.view.GotoTop()
+	e.preview, e.pvFocus = true, "pv:back"
 }
 
 func (e *editor) openInput(kind string) tea.Cmd {
@@ -314,7 +353,7 @@ func (e *editor) openInput(kind string) tea.Cmd {
 	} else {
 		e.input.Placeholder = "VARIABLE_NAME"
 	}
-	e.input.SetWidth(max(20, e.width-14))
+	e.input.SetWidth(layoutWidth(e.width) - 16)
 	return e.input.Focus()
 }
 
@@ -354,6 +393,7 @@ func (e *editor) submitInput() tea.Cmd {
 			}
 		}
 		e.items = append(e.items, item{path: path, on: true, extra: true})
+		e.setNote(false, "Added %s, read-only. Click read-only to make it writable.", path)
 	case "env":
 		name := strings.TrimSpace(e.input.Value())
 		if err := profile.CheckEnvName(name); err != nil {
@@ -365,6 +405,7 @@ func (e *editor) submitInput() tea.Cmd {
 			return nil
 		}
 		e.env = append(e.env, envItem{name: name, on: true})
+		e.setNote(false, "Added %s; its value is read when the program starts.", name)
 	}
 	kind := e.inputKind
 	e.closeInput()
@@ -376,15 +417,16 @@ func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		e.width, e.height = msg.Width, msg.Height
-		e.view.SetWidth(msg.Width)
-		e.view.SetHeight(max(1, msg.Height-2))
+		e.view.SetWidth(layoutWidth(e.width) - 2)
+		e.view.SetHeight(max(3, e.height-9))
+		e.input.SetWidth(layoutWidth(e.width) - 16)
 		return e, nil
 	case tea.BackgroundColorMsg:
 		applyTheme(msg.IsDark())
 		return e, nil
 	case tea.MouseMotionMsg:
 		e.hover = ""
-		if e.hits != nil && !e.preview {
+		if e.hits != nil {
 			e.hover = e.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID()
 		}
 		return e, nil
@@ -398,10 +440,13 @@ func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			e.view, cmd = e.view.Update(msg)
 			return e, cmd
 		}
+		// The wheel scrolls the page; the focus stays where it is.
 		if msg.Mouse().Button == tea.MouseWheelUp {
-			return e, e.move(-1)
+			e.top -= 3
+		} else {
+			e.top += 3
 		}
-		return e, e.move(1)
+		return e, nil
 	}
 	var cmd tea.Cmd
 	switch {
@@ -418,15 +463,33 @@ func (e *editor) key(msg tea.KeyPressMsg) tea.Cmd {
 	if k == "ctrl+c" {
 		return tea.Quit
 	}
+	e.note = ""
+	if k != "esc" {
+		e.armed = false
+	}
 	if e.preview {
 		switch k {
-		case "esc", "q", "enter", "space":
+		case "esc", "q", "backspace":
 			e.preview = false
-			return nil
+		case "ctrl+s":
+			return e.save()
+		case "tab", "shift+tab", "left", "right":
+			if e.pvFocus == "pv:back" {
+				e.pvFocus = "pv:save"
+			} else {
+				e.pvFocus = "pv:back"
+			}
+		case "enter", "space":
+			if e.pvFocus == "pv:save" {
+				return e.save()
+			}
+			e.preview = false
+		default:
+			var cmd tea.Cmd
+			e.view, cmd = e.view.Update(msg)
+			return cmd
 		}
-		var cmd tea.Cmd
-		e.view, cmd = e.view.Update(msg)
-		return cmd
+		return nil
 	}
 	if e.inputKind != "" {
 		switch k {
@@ -442,12 +505,14 @@ func (e *editor) key(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	switch k {
+	case "ctrl+s":
+		return e.save()
 	case "tab", "down":
 		return e.move(1)
 	case "shift+tab", "up":
 		return e.move(-1)
 	case "esc":
-		return tea.Quit
+		return e.cancel()
 	}
 	if e.focus == "name" {
 		if k == "enter" {
@@ -464,6 +529,10 @@ func (e *editor) key(msg tea.KeyPressMsg) tea.Cmd {
 		return e.move(-1)
 	case "space", "enter":
 		return e.activate(e.focus)
+	case "p":
+		e.openPreview()
+	case "a":
+		return e.openInput("folder")
 	}
 	return nil
 }
@@ -472,12 +541,31 @@ func (e *editor) click(m tea.Mouse) tea.Cmd {
 	if m.Button != tea.MouseLeft || e.hits == nil {
 		return nil
 	}
+	e.note = ""
+	id := e.hits.Hit(m.X, m.Y).ID()
+	if id != "cancel" {
+		e.armed = false
+	}
 	if e.preview {
-		e.preview = false
+		switch id {
+		case "pv:back":
+			e.preview = false
+		case "pv:save":
+			return e.save()
+		}
 		return nil
 	}
-	id := e.hits.Hit(m.X, m.Y).ID()
-	if id == "" || id == "input" {
+	switch {
+	case id == "" || id == "input":
+		return nil
+	case strings.HasPrefix(id, "sug:"):
+		// A completion from the list under the add-folder box.
+		n, _ := strconv.Atoi(strings.TrimPrefix(id, "sug:"))
+		if s := e.input.MatchedSuggestions(); n < len(s) {
+			e.input.SetValue(s[n])
+			e.input.CursorEnd()
+			e.refreshInput()
+		}
 		return nil
 	}
 	if e.inputKind != "" {
@@ -490,101 +578,106 @@ func (e *editor) click(m tea.Mouse) tea.Cmd {
 	return e.activate(id)
 }
 
-// View draws the editor, or the preview pane over it.
+// View draws the editor, or the preview over it. The footer (help line,
+// buttons, key hints) stays on screen; the body above it scrolls.
 func (e *editor) View() tea.View {
-	w := e.screenWidth()
-	var content string
+	w := layoutWidth(e.width)
+	var all []line
 	if e.preview {
-		top := banner("preview", line{styled(styleDim, "the exact command box will run")}, w)
-		var b strings.Builder
-		for _, l := range top {
-			b.WriteString(lineText(l) + "\n")
-		}
-		b.WriteString(e.view.View() + "\n")
-		b.WriteString(lineText(hints(w, "↑↓", "scroll", "esc", "back")[0]))
-		content = b.String()
-		e.hits = nil
+		all = e.previewLines(w)
 	} else {
-		lines, focusLine := e.lines()
-		height := e.height
-		if height > 0 && len(lines) > height {
-			if focusLine < e.top {
-				e.top = focusLine
-			} else if focusLine >= e.top+height {
-				e.top = focusLine - height + 1
-			}
-			e.top = min(e.top, len(lines)-height)
-		} else {
+		body, focusLine := e.body(w)
+		footer := e.footer(w)
+		avail := e.height - len(footer)
+		if e.height <= 0 || len(body) <= avail {
 			e.top = 0
+		} else {
+			if e.focus != e.lastFocus && focusLine >= 0 {
+				if focusLine < e.top {
+					e.top = focusLine
+				} else if focusLine >= e.top+avail {
+					e.top = focusLine - avail + 1
+				}
+			}
+			e.top = max(0, min(e.top, len(body)-avail))
+			more := ""
+			switch {
+			case e.top > 0 && e.top+avail < len(body):
+				more = "↑↓ more"
+			case e.top > 0:
+				more = "↑ more above"
+			case e.top+avail < len(body):
+				more = "↓ more below"
+			}
+			body = body[e.top : e.top+avail]
+			footer[0] = ruleNote(w, more)
 		}
-		content, e.hits = render(lines, e.top, height)
+		e.lastFocus = e.focus
+		// Keep the footer at the bottom of the screen, like a native dialog.
+		for e.height > 0 && len(body)+len(footer) < e.height {
+			body = append(body, line{})
+		}
+		all = append(body, footer...)
 	}
+	var content string
+	content, e.hits = render(all)
 	return screen(content, "box · "+e.opts.Profile.Program)
 }
 
-// screenWidth is the width to lay out for: the terminal, capped so lines
-// stay readable on very wide terminals.
-func (e *editor) screenWidth() int {
-	if e.width <= 0 {
-		return 80
+// ruleNote is the separator above the footer, with a scroll hint on it.
+func ruleNote(w int, note string) line {
+	if note == "" {
+		return rule(w)
 	}
-	return min(max(e.width, 50), 100)
+	n := w - 6 - lipgloss.Width(note)
+	return line{styled(styleFaint, " "+strings.Repeat("─", max(1, n))+" "), styled(styleDim, note), styled(styleFaint, " ──")}
 }
 
-func lineText(l line) string {
-	var b strings.Builder
-	for _, s := range l {
-		b.WriteString(s.text)
-	}
-	return b.String()
-}
-
-// lines lays out the whole screen and says which line holds the focus.
-func (e *editor) lines() ([]line, int) {
-	w := e.screenWidth()
+// body lays out everything above the footer and says which line holds the
+// focus (-1 if the focus is in the footer).
+func (e *editor) body(w int) ([]line, int) {
 	inner := w - 6 // after the gutter
 	var ls []line
 	blank := func() { ls = append(ls, line{}) }
 
 	title := styleBold.Render(e.opts.Profile.Program) + styleDim.Render(" › ") + strings.TrimSpace(e.name.Value())
-	if e.opts.New {
+	switch {
+	case e.opts.New:
 		title += styleAccent.Render("  new")
+	case e.dirty():
+		title += styleAccent.Render("  ● edited")
 	}
-	gap := txt("   ")
 	sub := line(chip(e.p.Network, "network on", "network off", styleWarn))
-	sub = append(sub, gap)
+	sub = append(sub, txt("   "))
 	sub = append(sub, chip(e.p.Workdir.Mode == "rw", "project read-write", "project read-only", styleRW)...)
-	sub = append(sub, gap, styled(styleDim, e.opts.Workdir))
+	sub = append(sub, txt("   "), styled(styleDim, e.opts.Workdir))
 	ls = append(ls, banner(title, sub, w)...)
 	blank()
 
-	// Access: the project folder and the network.
+	// Access: segmented toggles for the project folder and the network.
 	rw := e.p.Workdir.Mode == "rw"
 	label := func(s string) seg { return styled(styleDim, pad(s, 17)) }
 	ls = append(ls, section("Access", ""),
 		line{gutter(), label("Project folder"),
-			e.widget("wd:rw", radio(rw)+" read-write", stylePlain), txt("    "),
-			e.widget("wd:ro", radio(!rw)+" read-only", stylePlain)},
+			e.segment("wd:rw", "read-write", rw), e.segment("wd:ro", "read-only", !rw)},
 		line{gutter(), label("Network"),
-			e.widget("net:off", radio(!e.p.Network)+" off", stylePlain), txt("           "),
-			e.widget("net:on", radio(e.p.Network)+" on", stylePlain)})
+			e.segment("net:off", "off", !e.p.Network), e.segment("net:on", "on", e.p.Network)})
 	if e.p.Network {
-		for _, l := range wrap("⚠ reaches the internet, your LAN, the Windows host on WSL and local services", styleWarn, inner) {
-			ls = append(ls, append(line{txt("    ")}, l...))
-		}
+		ls = append(ls, indent(wrap("⚠ reaches the internet, your LAN, the Windows host on WSL and local services",
+			styleWarn, inner), 4)...)
 	}
 	blank()
 
-	// Folders: one row each; the access mode lines up on the right.
+	// Folders: one row each; the access pill lines up on the right.
 	folder := func(i int, it item) line {
-		mlabel, mst := mode(it.rw)
-		right := []seg{e.widget(fmt.Sprintf("f:%d:mode", i), mlabel, mst)}
+		right := []seg{e.pill(fmt.Sprintf("f:%d:mode", i), it.rw)}
 		if it.extra {
-			right = append(right, txt("   "), e.widget(fmt.Sprintf("f:%d:rm", i), "✕", styleDim))
+			right = append(right, txt(" "), seg{text: btn("✕", secondary, e.focused(fmt.Sprintf("f:%d:rm", i)),
+				e.hover == fmt.Sprintf("f:%d:rm", i)), id: fmt.Sprintf("f:%d:rm", i)})
 		}
 		note := ""
 		if it.suggest && !it.on {
-			note = styleFaint.Render("suggested   ")
+			note = styleFaint.Render("suggested  ")
 		}
 		room := inner - width(line(right)) - lipgloss.Width(note) - 6
 		box := e.checkbox(fmt.Sprintf("f:%d:on", i), it.on, shorten(it.path, room))
@@ -611,9 +704,9 @@ func (e *editor) lines() ([]line, int) {
 			ls = append(ls, folder(i, it))
 		}
 	}
-	ls = append(ls, line{gutter(), e.widget("add:folder", "+ Add folder", styleDim)})
+	ls = append(ls, line{gutter(), e.button("add:folder", "+ Add folder", secondary)})
 	if e.inputKind == "folder" {
-		ls = append(ls, e.inputBox("tab completes · enter adds · esc closes", w)...)
+		ls = append(ls, e.inputBox("tab completes · ↑↓ choose · enter adds · esc closes", w)...)
 	}
 	blank()
 
@@ -623,7 +716,7 @@ func (e *editor) lines() ([]line, int) {
 	for i, v := range e.env {
 		groups = append(groups, append(e.checkbox(fmt.Sprintf("e:%d", i), v.on, v.name), txt("   ")))
 	}
-	groups = append(groups, []seg{e.widget("add:env", "+ Add variable", styleDim)})
+	groups = append(groups, []seg{e.button("add:env", "+ Add variable", secondary)})
 	for _, l := range flow(groups, inner) {
 		ls = append(ls, append(line{gutter()}, l...))
 	}
@@ -632,36 +725,20 @@ func (e *editor) lines() ([]line, int) {
 	}
 	blank()
 
-	// The profile name, as an input box, then the actions as a menu.
+	// The profile name, as an input box.
 	ls = append(ls, section("Profile name", ""))
-	nameBorder := styleFaint
+	border := styleFaint
 	if e.focus == "name" {
-		nameBorder = styleAccent
+		border = styleAccent
 	}
-	for _, l := range card([]line{{styled(styleDim, "> "), seg{text: e.name.View(), id: "name"}}}, min(w, 44), nameBorder) {
-		ls = append(ls, append(line{txt(" ")}, l...))
-	}
-	blank()
-	ls = append(ls,
-		line{gutter(), e.widget("save", "Save & run", stylePrimary), styled(styleFaint, "  ⏎")},
-		line{gutter(), e.widget("preview", "Preview command", stylePlain)},
-		line{gutter(), e.widget("cancel", "Cancel", stylePlain)})
-	for _, m := range strings.Split(e.msg, "\n") {
-		if m != "" {
-			blank()
-			for _, l := range wrap("✗ "+m, styleError, w-4) {
-				ls = append(ls, append(line{txt("  ")}, l...))
-			}
-		}
-	}
-	blank()
-	ls = append(ls, hints(w, "tab/↑↓", "to navigate", "space", "to toggle", "enter", "to select", "esc", "to cancel")...)
+	ls = append(ls, indent(card([]line{{styled(styleDim, "> "), seg{text: e.name.View(), id: "name"}}},
+		min(w-2, 46), border), 1)...)
 	pointAt(ls, e.focus)
 
-	focusLine := 0
+	focusLine := -1
 	for y, l := range ls {
 		for _, s := range l {
-			if s.id == e.focus || (s.id == "input" && e.inputKind != "") {
+			if (s.id != "" && s.id == e.focus) || (s.id == "input" && e.inputKind != "") {
 				focusLine = y
 			}
 		}
@@ -669,28 +746,193 @@ func (e *editor) lines() ([]line, int) {
 	return ls, focusLine
 }
 
-// inputBox is the add-folder or add-variable input: a rounded box with a
-// > prompt, then the live error if there is one, else what the keys do.
-func (e *editor) inputBox(keys string, w int) []line {
-	var out []line
-	for _, l := range card([]line{{styled(styleAccent, "> "), seg{text: e.input.View(), id: "input"}}}, w-4, styleAccent) {
-		out = append(out, append(line{txt("   ")}, l...))
-	}
-	if e.inputErr != "" {
-		for _, l := range wrap("✗ "+e.inputErr, styleError, w-6) {
-			out = append(out, append(line{txt("    ")}, l...))
+// footer is the part that stays on screen: a separator, a help line about
+// the focused item (or an error or a note), the buttons and the key hints.
+func (e *editor) footer(w int) []line {
+	ls := []line{rule(w)}
+	var text []line
+	switch {
+	case e.msg != "":
+		text = indent(wrap("✗ "+e.msg, styleError, w-4), 2)
+	case e.note != "":
+		st, mark := styleOK, "✓ "
+		if e.noteWarn {
+			st, mark = styleWarn, "⚠ "
 		}
-	} else {
-		out = append(out, line{txt("    "), styled(styleDim, keys)})
+		text = indent(wrap(mark+e.note, st, w-4), 2)
+	default:
+		// The help line, marked by an accent bar, like a callout.
+		for i, l := range wrap(e.describe(e.focus), styleDim, w-6) {
+			mark := txt("    ")
+			if i == 0 {
+				mark = seg{text: "  " + styleAccent.Render("▎") + " "}
+			}
+			text = append(text, append(line{mark}, l...))
+		}
 	}
-	return out
+	// Two lines, always, so the page doesn't jump as the focus moves;
+	// only an error may take more.
+	for len(text) < 2 {
+		text = append(text, line{})
+	}
+	if e.msg == "" && len(text) > 2 {
+		text = text[:2]
+	}
+	ls = append(ls, text...)
+	buttons := line{
+		e.button("preview", "Preview", secondary), txt("  "),
+		e.button("cancel", "Cancel", secondary), txt("  "),
+		e.button("save", "▶ Save & run", primary), txt(" "),
+	}
+	ls = append(ls, line{}, rightAlign(buttons, w), line{})
+	return append(ls, hints(w, "tab/↑↓", "move", "space", "toggle", "a", "add", "p", "preview",
+		"ctrl+s", "save", "esc", "cancel")...)
 }
 
-// shorten keeps the end of a path, which says the most, within n columns.
-func shorten(s string, n int) string {
-	r := []rune(s)
-	if n < 4 || len(r) <= n {
-		return s
+// describe explains the focused widget in one sentence.
+func (e *editor) describe(id string) string {
+	kind, i, action := parseID(id)
+	prog := e.opts.Profile.Program
+	switch kind {
+	case "wd":
+		if action == "rw" {
+			return "The program can create, change and delete files in this project. .git/config and .git/hooks stay read-only."
+		}
+		return "The program can read this project but not change anything in it."
+	case "net":
+		if action == "on" {
+			return "Full network access: the internet, your LAN, the Windows host on WSL and local services."
+		}
+		return "No network: only a loopback interface inside the box. Safest when the program works offline."
+	case "f":
+		if i >= len(e.items) {
+			return ""
+		}
+		it := e.items[i]
+		switch action {
+		case "on":
+			if it.extra {
+				return "Mount " + it.path + " into the box at the same path. It must already exist."
+			}
+			return "Mount " + it.path + ", where " + prog + " keeps its own files. Created if it doesn't exist yet."
+		case "mode":
+			return "Read-write lets the program change files there; read-only lets it only read them. Space switches."
+		case "rm":
+			return "Remove " + it.path + " from this profile."
+		}
+	case "e":
+		if i < len(e.env) {
+			return "Copy " + e.env[i].name + " from your environment into the box when it starts. The value is never saved."
+		}
+	case "add":
+		if action == "folder" {
+			return "Add a folder that already exists on this machine. Tab completes the path."
+		}
+		return "Pass another environment variable by name."
+	case "name":
+		return "The profile's name. Saving under a new name keeps the old profile as it was."
+	case "preview":
+		return "Show the exact bwrap command box will run. Nothing runs."
+	case "cancel":
+		return "Leave without saving or running anything."
+	case "save":
+		return "Save this profile and run " + prog + " in the box."
 	}
-	return "…" + string(r[len(r)-n+1:])
+	return ""
+}
+
+// inputBox is the add-folder or add-variable input: a rounded box with a
+// > prompt, the matching folders below it, then the live error if there is
+// one, else what the keys do.
+func (e *editor) inputBox(keys string, w int) []line {
+	out := indent(card([]line{{styled(styleAccent, "> "), seg{text: e.input.View(), id: "input"}}}, w-4, styleAccent), 3)
+	if e.inputKind == "folder" {
+		matches := e.input.MatchedSuggestions()
+		cur := e.input.CurrentSuggestionIndex()
+		start := max(0, min(cur-2, len(matches)-6))
+		for n := start; n < len(matches) && n < start+6; n++ {
+			ptr, st := "  ", styleDim
+			if n == cur {
+				ptr, st = styleAccent.Render("❯ "), stylePlain
+			}
+			if e.hover == "sug:"+strconv.Itoa(n) {
+				st = st.Underline(true)
+			}
+			out = append(out, line{txt("     "), txt(ptr), seg{text: st.Render(shorten(matches[n], w-12)), id: "sug:" + strconv.Itoa(n)}})
+		}
+		if len(matches) > 6 {
+			out = append(out, line{txt("       "), styled(styleFaint, fmt.Sprintf("%d folders match", len(matches)))})
+		}
+	}
+	if e.inputErr != "" {
+		return append(out, indent(wrap("✗ "+e.inputErr, styleError, w-8), 5)...)
+	}
+	return append(out, line{txt("     "), styled(styleDim, keys)})
+}
+
+// previewLines is the preview screen: the coloured command in a scrolling
+// pane, with Back and Save & run buttons.
+func (e *editor) previewLines(w int) []line {
+	ls := banner("Preview", line{styled(styleDim, "the exact command box will run · nothing has run yet")}, w)
+	for _, l := range strings.Split(e.view.View(), "\n") {
+		ls = append(ls, line{txt(" "), txt(l)})
+	}
+	pct := fmt.Sprintf("%3.0f%%", e.view.ScrollPercent()*100)
+	buttons := line{
+		seg{text: btn("Back", secondary, e.pvFocus == "pv:back", e.hover == "pv:back"), id: "pv:back"}, txt("  "),
+		seg{text: btn("▶ Save & run", primary, e.pvFocus == "pv:save", e.hover == "pv:save"), id: "pv:save"}, txt(" "),
+	}
+	footer := []line{ruleNote(w, pct), line{}, rightAlign(buttons, w), line{}}
+	footer = append(footer, hints(w, "↑↓ pgup pgdn", "scroll", "tab", "switch button", "esc", "back", "ctrl+s", "save & run")...)
+	for e.height > 0 && len(ls)+len(footer) < e.height {
+		ls = append(ls, line{})
+	}
+	return append(ls, footer...)
+}
+
+// colorize highlights a dry-run command for the preview: environment
+// variables, then bwrap's options, then the program itself.
+func colorize(dry string) string {
+	var out []string
+	inData := false
+	for _, raw := range strings.Split(dry, "\n") {
+		body, cont := strings.CutSuffix(raw, " \\")
+		lead := body[:len(body)-len(strings.TrimLeft(body, " "))]
+		t := strings.TrimLeft(body, " ")
+		var s string
+		switch {
+		case inData:
+			s = styleDim.Render(t)
+			inData = !strings.HasSuffix(t, "'")
+		case strings.HasPrefix(t, "#"):
+			s = styleFaint.Italic(true).Render(t)
+		case strings.HasPrefix(t, "env "):
+			s = styleBold.Render(t)
+		case strings.HasPrefix(t, "-- "):
+			cmd, args, _ := strings.Cut(strings.TrimPrefix(t, "-- "), " ")
+			s = styleAccent.Render("--") + " " + styleOK.Bold(true).Render(cmd)
+			if args != "" {
+				s += " " + args
+			}
+		case strings.HasPrefix(t, "--"):
+			flag, rest, _ := strings.Cut(t, " ")
+			s = styleSection.Render(flag)
+			if rest != "" {
+				s += " " + rest
+			}
+		case strings.Contains(t, "<<<"):
+			s = styleDim.Render(t)
+			inData = !strings.HasSuffix(t, "'") || strings.HasSuffix(t, "<<<'")
+		case strings.Contains(t, "=") && !strings.Contains(t, " "):
+			k, v, _ := strings.Cut(t, "=")
+			s = styleRO.Render(k) + styleFaint.Render("=") + v
+		default:
+			s = styleBold.Render(t)
+		}
+		if cont {
+			s += styleFaint.Render(" \\")
+		}
+		out = append(out, lead+s)
+	}
+	return strings.Join(out, "\n")
 }

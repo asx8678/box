@@ -19,8 +19,10 @@ func Confirm(title string, body []string, question string) (bool, error) {
 type confirm struct {
 	title, question string
 	body            []string
-	onYes           bool // which button has focus
+	onYes           bool // which button has the focus
 	yes             bool
+	width           int
+	hover           string
 	hits            *lipgloss.Compositor
 }
 
@@ -28,6 +30,8 @@ func (m *confirm) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "y", "Y":
@@ -44,23 +48,19 @@ func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		applyTheme(msg.IsDark())
 	case tea.MouseMotionMsg:
+		m.hover = ""
 		if m.hits != nil {
-			switch m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID() {
-			case "o:0":
-				m.onYes = true
-			case "o:1":
-				m.onYes = false
-			}
+			m.hover = m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID()
 		}
 	case tea.MouseClickMsg:
 		if msg.Mouse().Button != tea.MouseLeft || m.hits == nil {
 			return m, nil
 		}
 		switch m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID() {
-		case "o:0":
+		case "yes":
 			m.yes = true
 			return m, tea.Quit
-		case "o:1":
+		case "no":
 			return m, tea.Quit
 		}
 	}
@@ -68,23 +68,20 @@ func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *confirm) View() tea.View {
-	const w = 72
-	ls := banner(m.title, line{styled(styleWarn, "this can't be undone")}, w)
+	w := min(layoutWidth(m.width), 76)
+	ls := banner(m.title, line{styled(styleWarn, "⚠ this can't be undone")}, w)
 	ls = append(ls, line{})
 	for _, b := range m.body {
-		for _, l := range wrap(b, stylePlain, w-4) {
-			ls = append(ls, append(line{txt(" ")}, l...))
-		}
+		ls = append(ls, indent(wrap(b, stylePlain, w-4), 1)...)
 	}
-	selected := 1
-	if m.onYes {
-		selected = 0
+	ls = append(ls, line{}, line{txt(" "), styled(styleBold, m.question)}, line{}, rule(w), line{})
+	buttons := line{
+		seg{text: btn("No", secondary, !m.onYes, m.hover == "no"), id: "no"}, txt("  "),
+		seg{text: btn("Yes", danger, m.onYes, m.hover == "yes"), id: "yes"}, txt(" "),
 	}
-	ls = append(ls, line{}, section(m.question, ""), line{})
-	ls = append(ls, menu([]string{"Yes", "No"}, nil, selected, "o:", w)...)
-	ls = append(ls, line{})
-	ls = append(ls, hints(w, "y/n", "to answer", "↑↓", "to move", "enter", "to choose", "esc", "means no")...)
+	ls = append(ls, rightAlign(buttons, w), line{})
+	ls = append(ls, hints(w, "y", "yes", "n", "no", "←→", "switch", "enter", "press", "esc", "no")...)
 	var content string
-	content, m.hits = render(ls, 0, 0)
+	content, m.hits = render(ls)
 	return screen(content, "box")
 }

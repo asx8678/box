@@ -4,6 +4,7 @@ import (
 	"errors"
 	"image/color"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -96,10 +97,10 @@ func TestEditorMouse(t *testing.T) {
 func TestEditorKeyboardFocusOrder(t *testing.T) {
 	e := newTestEditor(t)
 	ids := e.ids()
-	if ids[0] != "wd:rw" || ids[len(ids)-1] != "cancel" {
+	if ids[0] != "wd:rw" || ids[len(ids)-1] != "save" {
 		t.Fatalf("ids %v", ids)
 	}
-	e.setFocus("cancel")
+	e.setFocus("save")
 	e.Update(press(tea.KeyTab)) // from the last widget wraps to the first
 	if e.focus != "wd:rw" {
 		t.Fatalf("focus %s", e.focus)
@@ -223,7 +224,7 @@ func TestConfirm(t *testing.T) {
 		t.Error("y didn't confirm")
 	}
 	m = &confirm{title: "t", question: "q?"}
-	clickOn(t, m, func() *lipgloss.Compositor { return m.hits }, "o:0")
+	clickOn(t, m, func() *lipgloss.Compositor { return m.hits }, "yes")
 	if !m.yes {
 		t.Error("clicking Yes didn't confirm")
 	}
@@ -303,4 +304,114 @@ func TestPickerHoverSelects(t *testing.T) {
 		}
 	}
 	t.Fatal("row not on screen")
+}
+
+func TestEscGuardsUnsavedChanges(t *testing.T) {
+	e := newTestEditor(t)
+	if _, cmd := e.Update(press(tea.KeyEscape)); cmd == nil {
+		t.Fatal("esc with no changes should leave")
+	}
+	e = newTestEditor(t)
+	clickOn(t, e, e.hitsFn(), "net:on") // a change
+	if _, cmd := e.Update(press(tea.KeyEscape)); cmd != nil || !e.armed || !strings.Contains(e.note, "unsaved") {
+		t.Fatalf("first esc should warn, got note %q armed %v", e.note, e.armed)
+	}
+	if _, cmd := e.Update(press(tea.KeyEscape)); cmd == nil {
+		t.Fatal("second esc should discard and leave")
+	}
+	// Any other key in between disarms it.
+	e = newTestEditor(t)
+	clickOn(t, e, e.hitsFn(), "net:on")
+	e.Update(press(tea.KeyEscape))
+	e.Update(press(tea.KeyTab))
+	if _, cmd := e.Update(press(tea.KeyEscape)); cmd != nil {
+		t.Error("esc after another key should warn again, not leave")
+	}
+	if e.result.Saved {
+		t.Error("nothing should have been saved")
+	}
+}
+
+func TestShortcuts(t *testing.T) {
+	e := newTestEditor(t)
+	e.setFocus("wd:rw")
+	e.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if !e.preview {
+		t.Fatal("p should open the preview")
+	}
+	e.Update(press(tea.KeyEscape))
+	e.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if e.inputKind != "folder" {
+		t.Fatal("a should open the add-folder box")
+	}
+	e.Update(press(tea.KeyEscape))
+	e.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if !e.result.Saved {
+		t.Errorf("ctrl+s should save: %q", e.msg)
+	}
+}
+
+func TestWheelScrollsWithoutMovingFocus(t *testing.T) {
+	e := newTestEditor(t)
+	e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	e.setFocus("wd:rw")
+	e.View()
+	e.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	e.View()
+	if e.focus != "wd:rw" || e.top == 0 {
+		t.Errorf("focus %q top %d", e.focus, e.top)
+	}
+}
+
+func TestPreviewButtons(t *testing.T) {
+	e := newTestEditor(t)
+	clickOn(t, e, e.hitsFn(), "preview")
+	clickOn(t, e, e.hitsFn(), "pv:back")
+	if e.preview {
+		t.Fatal("Back should close the preview")
+	}
+	clickOn(t, e, e.hitsFn(), "preview")
+	clickOn(t, e, e.hitsFn(), "pv:save")
+	if !e.result.Saved {
+		t.Errorf("Save & run in the preview should save: %q", e.msg)
+	}
+}
+
+func TestCompletionClick(t *testing.T) {
+	root := t.TempDir()
+	os.Mkdir(root+"/code", 0o755)
+	e := newTestEditor(t)
+	e.opts.Home = root
+	e.Update(tea.WindowSizeMsg{Width: 80, Height: 60})
+	e.openInput("folder")
+	clickOn(t, e, e.hitsFn(), "sug:0")
+	if e.input.Value() != "~/code/" {
+		t.Errorf("value %q", e.input.Value())
+	}
+}
+
+func TestConfirmButtons(t *testing.T) {
+	m := &confirm{title: "t", question: "q?"}
+	clickOn(t, m, func() *lipgloss.Compositor { return m.hits }, "no")
+	if m.yes {
+		t.Error("No returned yes")
+	}
+	m = &confirm{title: "t", question: "q?"}
+	m.Update(press(tea.KeyRight))
+	m.Update(press(tea.KeyEnter))
+	if !m.yes {
+		t.Error("→ then enter should press Yes")
+	}
+}
+
+func TestColorizeKeepsText(t *testing.T) {
+	in := "env -i \\\n  HOME=/h \\\n/usr/bin/bwrap \\\n  --bind /a /a \\\n  -- /bin/x arg \\\n  3<<<'program=x\nprofile=y'\n# note"
+	out := ansiStrip(colorize(in))
+	if out != in {
+		t.Errorf("colorize changed the text:\n%s", out)
+	}
+}
+
+func ansiStrip(s string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;:]*[A-Za-z]`).ReplaceAllString(s, "")
 }

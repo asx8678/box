@@ -35,6 +35,7 @@ type picker struct {
 	cursor  int
 	chosen  int
 	width   int
+	hover   string
 	hits    *lipgloss.Compositor
 }
 
@@ -47,9 +48,11 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		applyTheme(msg.IsDark())
 	case tea.MouseMotionMsg:
-		// Like a native list: the row under the mouse is selected.
+		m.hover = ""
 		if m.hits != nil {
-			if i, err := strconv.Atoi(strings.TrimPrefix(m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID(), "c:")); err == nil {
+			m.hover = m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID()
+			// Like a native list: the row under the mouse is selected.
+			if i, err := strconv.Atoi(strings.TrimPrefix(m.hover, "c:")); err == nil {
 				m.cursor = i
 			}
 		}
@@ -76,7 +79,11 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		id := m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID()
-		if id == "cancel" {
+		switch {
+		case id == "cancel":
+			return m, tea.Quit
+		case id == "run":
+			m.chosen = m.cursor
 			return m, tea.Quit
 		}
 		if i, err := strconv.Atoi(strings.TrimPrefix(id, "c:")); err == nil {
@@ -94,25 +101,26 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *picker) View() tea.View {
-	w := 80
-	if m.width > 0 {
-		w = min(max(m.width, 50), 100)
-	}
+	w := layoutWidth(m.width)
 	nameWidth := 8
-	var names, details []string
 	for _, c := range m.choices {
 		nameWidth = max(nameWidth, lipgloss.Width(c.Name)+3)
 	}
+	var names, details []string
 	for _, c := range m.choices {
 		names = append(names, pad(c.Name, nameWidth))
 		details = append(details, c.Detail)
 	}
 	ls := banner(m.title, line{styled(styleDim, fmt.Sprintf("%d profiles, none remembered for this folder", len(m.choices)))}, w)
 	ls = append(ls, line{}, section("Which profile should run here?", ""), line{})
-	ls = append(ls, menu(names, details, m.cursor, "c:", w)...)
-	ls = append(ls, line{}, line{txt("   "), seg{text: styleDim.Render("Cancel"), id: "cancel"}}, line{})
-	ls = append(ls, hints(w, "↑↓", "to move", "enter", "to run", "1–9", "to pick", "esc", "to cancel")...)
+	ls = append(ls, menu(names, details, m.cursor, -1, "c:", w)...)
+	buttons := line{
+		seg{text: btn("Cancel", secondary, false, m.hover == "cancel"), id: "cancel"}, txt("  "),
+		seg{text: btn("▶ Run "+m.choices[m.cursor].Name, primary, false, m.hover == "run"), id: "run"}, txt(" "),
+	}
+	ls = append(ls, line{}, rule(w), line{}, rightAlign(buttons, w), line{})
+	ls = append(ls, hints(w, "↑↓", "choose", "enter", "run", "1–9", "run that one", "esc", "cancel")...)
 	var content string
-	content, m.hits = render(ls, 0, 0)
+	content, m.hits = render(ls)
 	return screen(content, "box")
 }
