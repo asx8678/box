@@ -26,7 +26,9 @@ func TestParse(t *testing.T) {
 		{"--net", "--no-net", "x"},
 		{"-p", "a", "-n", "b", "x"},
 		{"--bogus", "x"},
-		{"-r", "x"},
+		{"-e", "x"},
+		{"-y", "x"},
+		{"-r", "-p", "a", "x"},
 	} {
 		if _, _, err := parse(bad, io.Discard); err == nil {
 			t.Errorf("%q should be refused", bad)

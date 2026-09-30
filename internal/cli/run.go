@@ -20,6 +20,8 @@ import (
 const ExitBox = 125
 
 const usage = `usage: box [flags] <program> [program args...]
+       box -l | --list
+       box -r [-y] <program>
        box --doctor | --version | -h
 
 Runs <program> inside a bubblewrap sandbox limited to the current folder.
@@ -32,6 +34,9 @@ program untouched.
   --no-net     network off for this run only
   --dry-run    print the bwrap command instead of running it
   --no-tui     never open the TUI; fail if a choice is needed
+  -l, --list   list programs and their profiles
+  -r           reset: delete the program's profiles and folder memory
+  -y           with -r: don't ask for confirmation (keeps the private home)
   --doctor     check bubblewrap and this machine, then exit
   --version    print box's version
 
@@ -43,6 +48,7 @@ type options struct {
 	net, noNet            bool
 	dryRun, noTUI, doctor bool
 	version, help         bool
+	list, reset, yes      bool
 }
 
 func parse(args []string, stderr io.Writer) (options, []string, error) {
@@ -59,16 +65,24 @@ func parse(args []string, stderr io.Writer) (options, []string, error) {
 	fs.BoolVar(&o.version, "version", false, "")
 	fs.BoolVar(&o.help, "h", false, "")
 	fs.BoolVar(&o.help, "help", false, "")
-	for _, later := range []string{"e", "r", "l", "list", "y"} {
+	fs.BoolVar(&o.list, "l", false, "")
+	fs.BoolVar(&o.list, "list", false, "")
+	fs.BoolVar(&o.reset, "r", false, "")
+	fs.BoolVar(&o.yes, "y", false, "")
+	for _, later := range []string{"e"} {
 		fs.Bool(later, false, "")
 	}
 	if err := fs.Parse(args); err != nil {
 		return o, nil, err
 	}
-	for _, later := range []string{"e", "r", "l", "list", "y"} {
-		if f := fs.Lookup(later); f.Value.String() == "true" {
-			return o, nil, fmt.Errorf("-%s arrives in a later milestone", later)
-		}
+	if fs.Lookup("e").Value.String() == "true" {
+		return o, nil, errors.New("-e arrives with the TUI (milestone 4)")
+	}
+	if o.yes && !o.reset {
+		return o, nil, errors.New("-y only goes with -r")
+	}
+	if o.reset && (o.profile != "" || o.newProfile != "" || o.dryRun) {
+		return o, nil, errors.New("-r can't be combined with -p, -n or --dry-run")
 	}
 	if o.net && o.noNet {
 		return o, nil, errors.New("--net and --no-net can't be used together")
@@ -100,8 +114,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if o.doctor {
+	switch {
+	case o.doctor:
 		return doctor(dirs, stdout, stderr)
+	case o.list:
+		return list(dirs, stdout, stderr)
+	case o.reset:
+		if len(rest) != 1 {
+			return fail(stderr, errors.New("usage: box -r [-y] <program>"))
+		}
+		return reset(dirs, rest[0], o.yes, stdout, stderr)
 	}
 	if len(rest) == 0 {
 		fmt.Fprint(stderr, usage)
@@ -144,6 +166,13 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	name, p, err := choose(dirs, folders, o, prog.Name, realWd)
 	if err != nil {
 		return ExitBox, err
+	}
+	if o.newProfile != "" {
+		if s := profile.Suggest(h, dirs.Home, p); len(s) > 0 {
+			fmt.Fprintf(os.Stderr, "box: folders named after %s that the profile doesn't mount: %s\n"+
+				"     add them under [home] in %s if it needs them\n",
+				prog.Name, strings.Join(s, ", "), profile.Path(dirs, prog.Name, name))
+		}
 	}
 
 	self, _ := os.Executable()
@@ -230,7 +259,11 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 	if name == "" {
 		switch len(names) {
 		case 0:
-			return "", profile.Profile{}, fmt.Errorf("%s has no profile yet; create one from its preset with:\n  box -n default --no-tui %s", program, program)
+			why := "the profile editor arrives with the TUI (milestone 4)"
+			if o.noTUI || !interactive() {
+				why = "there's no terminal to ask on"
+			}
+			return "", profile.Profile{}, fmt.Errorf("%s has no profile yet, and %s; create one from its preset with:\n  box -n default --no-tui %s", program, why, program)
 		case 1:
 			name = names[0]
 		default:
