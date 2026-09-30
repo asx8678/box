@@ -93,6 +93,7 @@ type editor struct {
 
 	width, height int
 	top           int
+	hover         string // the widget under the mouse
 	hits          *lipgloss.Compositor
 	result        Result
 }
@@ -134,7 +135,8 @@ func newEditor(opts Options) *editor {
 	return e
 }
 
-func (e *editor) Init() tea.Cmd { return nil }
+// Init asks the terminal for its background, to pick the light or dark palette.
+func (e *editor) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 // build turns the screen's state back into a profile.
 func (e *editor) build() profile.Profile {
@@ -183,7 +185,7 @@ func (e *editor) ids() []string {
 	for i := range e.env {
 		ids = append(ids, fmt.Sprintf("e:%d", i))
 	}
-	return append(ids, "add:env", "name", "preview", "cancel", "save")
+	return append(ids, "add:env", "name", "save", "preview", "cancel")
 }
 
 func (e *editor) move(delta int) tea.Cmd {
@@ -377,6 +379,15 @@ func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		e.view.SetWidth(msg.Width)
 		e.view.SetHeight(max(1, msg.Height-2))
 		return e, nil
+	case tea.BackgroundColorMsg:
+		applyTheme(msg.IsDark())
+		return e, nil
+	case tea.MouseMotionMsg:
+		e.hover = ""
+		if e.hits != nil && !e.preview {
+			e.hover = e.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID()
+		}
+		return e, nil
 	case tea.KeyPressMsg:
 		return e, e.key(msg)
 	case tea.MouseClickMsg:
@@ -481,10 +492,17 @@ func (e *editor) click(m tea.Mouse) tea.Cmd {
 
 // View draws the editor, or the preview pane over it.
 func (e *editor) View() tea.View {
+	w := e.screenWidth()
 	var content string
 	if e.preview {
-		help := styleDim.Render("  bwrap command · ↑↓ / wheel to scroll · Esc to close")
-		content = e.view.View() + "\n" + help
+		top := banner("preview", line{styled(styleDim, "the exact command box will run")}, w)
+		var b strings.Builder
+		for _, l := range top {
+			b.WriteString(lineText(l) + "\n")
+		}
+		b.WriteString(e.view.View() + "\n")
+		b.WriteString(lineText(hints(w, "↑↓", "scroll", "esc", "back")[0]))
+		content = b.String()
 		e.hits = nil
 	} else {
 		lines, focusLine := e.lines()
@@ -504,100 +522,141 @@ func (e *editor) View() tea.View {
 	return screen(content, "box · "+e.opts.Profile.Program)
 }
 
+// screenWidth is the width to lay out for: the terminal, capped so lines
+// stay readable on very wide terminals.
+func (e *editor) screenWidth() int {
+	if e.width <= 0 {
+		return 80
+	}
+	return min(max(e.width, 50), 100)
+}
+
+func lineText(l line) string {
+	var b strings.Builder
+	for _, s := range l {
+		b.WriteString(s.text)
+	}
+	return b.String()
+}
+
 // lines lays out the whole screen and says which line holds the focus.
 func (e *editor) lines() ([]line, int) {
-	w := max(40, e.width)
+	w := e.screenWidth()
+	inner := w - 6 // after the gutter
 	var ls []line
-	add := func(l ...seg) { ls = append(ls, line(l)) }
+	blank := func() { ls = append(ls, line{}) }
 
-	title := fmt.Sprintf(" box · %s · profile %q", e.opts.Profile.Program, strings.TrimSpace(e.name.Value()))
+	title := styleBold.Render(e.opts.Profile.Program) + styleDim.Render(" › ") + strings.TrimSpace(e.name.Value())
 	if e.opts.New {
-		title += " (new)"
+		title += styleAccent.Render("  new")
 	}
-	right := e.opts.Workdir
-	if gap := w - lipgloss.Width(title) - lipgloss.Width(right) - 1; gap > 0 {
-		add(styled(styleTitle, title), txt(strings.Repeat(" ", gap)), styled(styleDim, right))
-	} else {
-		add(styled(styleTitle, title))
-	}
-	add()
+	gap := txt("   ")
+	sub := line(chip(e.p.Network, "network on", "network off", styleWarn))
+	sub = append(sub, gap)
+	sub = append(sub, chip(e.p.Workdir.Mode == "rw", "project read-write", "project read-only", styleRW)...)
+	sub = append(sub, gap, styled(styleDim, e.opts.Workdir))
+	ls = append(ls, banner(title, sub, w)...)
+	blank()
 
+	// Access: the project folder and the network.
 	rw := e.p.Workdir.Mode == "rw"
-	add(styled(styleSection, " Project folder  "),
-		e.widget("wd:rw", radio(rw)+" read-write"), txt("  "),
-		e.widget("wd:ro", radio(!rw)+" read-only"), txt("     "),
-		styled(styleSection, "Network  "),
-		e.widget("net:off", radio(!e.p.Network)+" off"), txt("  "),
-		e.widget("net:on", radio(e.p.Network)+" on"))
+	label := func(s string) seg { return styled(styleDim, pad(s, 17)) }
+	ls = append(ls, section("Access", ""),
+		line{gutter(), label("Project folder"),
+			e.widget("wd:rw", radio(rw)+" read-write", stylePlain), txt("    "),
+			e.widget("wd:ro", radio(!rw)+" read-only", stylePlain)},
+		line{gutter(), label("Network"),
+			e.widget("net:off", radio(!e.p.Network)+" off", stylePlain), txt("           "),
+			e.widget("net:on", radio(e.p.Network)+" on", stylePlain)})
 	if e.p.Network {
-		add(styled(styleWarn, "   Network on reaches the internet, your LAN, the Windows host on WSL and local services."))
+		for _, l := range wrap("⚠ reaches the internet, your LAN, the Windows host on WSL and local services", styleWarn, inner) {
+			ls = append(ls, append(line{txt("    ")}, l...))
+		}
 	}
-	add()
+	blank()
 
-	pathWidth := 24
-	for _, it := range e.items {
-		pathWidth = max(pathWidth, lipgloss.Width(it.path)+2)
-	}
-	pathWidth = min(pathWidth, max(24, w-30))
-	folder := func(i int, it item) {
-		l := line{txt("  "), e.widget(fmt.Sprintf("f:%d:on", i), check(it.on)+" "+pad(it.path, pathWidth)),
-			txt(" "), e.widget(fmt.Sprintf("f:%d:mode", i), mode(it.rw))}
+	// Folders: one row each; the access mode lines up on the right.
+	folder := func(i int, it item) line {
+		mlabel, mst := mode(it.rw)
+		right := []seg{e.widget(fmt.Sprintf("f:%d:mode", i), mlabel, mst)}
 		if it.extra {
-			l = append(l, txt("   "), e.widget(fmt.Sprintf("f:%d:rm", i), "[remove]"))
+			right = append(right, txt("   "), e.widget(fmt.Sprintf("f:%d:rm", i), "✕", styleDim))
 		}
+		note := ""
 		if it.suggest && !it.on {
-			l = append(l, styled(styleDim, "   suggested"))
+			note = styleFaint.Render("suggested   ")
 		}
-		ls = append(ls, l)
+		room := inner - width(line(right)) - lipgloss.Width(note) - 6
+		box := e.checkbox(fmt.Sprintf("f:%d:on", i), it.on, shorten(it.path, room))
+		gap := inner - width(line(box)) - lipgloss.Width(note) - width(line(right))
+		row := append(line{gutter()}, box...)
+		return append(append(row, txt(strings.Repeat(" ", max(2, gap))), txt(note)), right...)
 	}
-	add(styled(styleSection, " Program's own folders"), styled(styleDim, "  (created if missing)"))
+	ls = append(ls, section("Program's own folders", "created if missing"))
 	n := 0
 	for i, it := range e.items {
 		if !it.extra {
-			folder(i, it)
+			ls = append(ls, folder(i, it))
 			n++
 		}
 	}
 	if n == 0 {
-		add(styled(styleDim, "  none"))
+		ls = append(ls, line{txt("    "), styled(styleFaint, "none")})
 	}
-	add(styled(styleSection, " Extra folders"))
+	blank()
+
+	ls = append(ls, section("Extra folders", "must exist"))
 	for i, it := range e.items {
 		if it.extra {
-			folder(i, it)
+			ls = append(ls, folder(i, it))
 		}
 	}
-	add(txt("  "), e.widget("add:folder", "[+ add folder]"))
+	ls = append(ls, line{gutter(), e.widget("add:folder", "+ Add folder", styleDim)})
 	if e.inputKind == "folder" {
-		add(txt("  folder: "), seg{text: e.input.View(), id: "input"})
-		e.inputLine(add, "Tab completes · Enter adds · Esc closes")
+		ls = append(ls, e.inputBox("tab completes · enter adds · esc closes", w)...)
 	}
-	add()
+	blank()
 
-	add(styled(styleSection, " Environment variables passed in"), styled(styleDim, "  (TERM, LANG and the locale always are)"))
+	// Environment: ticked variables are copied in at run time.
+	ls = append(ls, section("Environment", "TERM, LANG and the locale always pass"))
 	var groups [][]seg
 	for i, v := range e.env {
-		groups = append(groups, []seg{e.widget(fmt.Sprintf("e:%d", i), check(v.on)+" "+v.name), txt("  ")})
+		groups = append(groups, append(e.checkbox(fmt.Sprintf("e:%d", i), v.on, v.name), txt("   ")))
 	}
-	groups = append(groups, []seg{e.widget("add:env", "[+ add]")})
-	ls = append(ls, flow("  ", groups, w)...)
+	groups = append(groups, []seg{e.widget("add:env", "+ Add variable", styleDim)})
+	for _, l := range flow(groups, inner) {
+		ls = append(ls, append(line{gutter()}, l...))
+	}
 	if e.inputKind == "env" {
-		add(txt("  name: "), seg{text: e.input.View(), id: "input"})
-		e.inputLine(add, "Enter adds · Esc closes")
+		ls = append(ls, e.inputBox("enter adds · esc closes", w)...)
 	}
-	add()
+	blank()
 
-	nameSeg := seg{text: "[" + e.name.View() + "]", id: "name"}
-	add(txt(" Profile name: "), nameSeg, txt("   "),
-		e.widget("preview", "[ Preview command ]"), txt("  "),
-		e.widget("cancel", "[ Cancel ]"), txt("  "),
-		seg{text: e.saveLabel(), id: "save"})
-	if e.msg != "" {
-		for _, m := range strings.Split(e.msg, "\n") {
-			add(styled(styleError, " "+m))
+	// The profile name, as an input box, then the actions as a menu.
+	ls = append(ls, section("Profile name", ""))
+	nameBorder := styleFaint
+	if e.focus == "name" {
+		nameBorder = styleAccent
+	}
+	for _, l := range card([]line{{styled(styleDim, "> "), seg{text: e.name.View(), id: "name"}}}, min(w, 44), nameBorder) {
+		ls = append(ls, append(line{txt(" ")}, l...))
+	}
+	blank()
+	ls = append(ls,
+		line{gutter(), e.widget("save", "Save & run", stylePrimary), styled(styleFaint, "  ⏎")},
+		line{gutter(), e.widget("preview", "Preview command", stylePlain)},
+		line{gutter(), e.widget("cancel", "Cancel", stylePlain)})
+	for _, m := range strings.Split(e.msg, "\n") {
+		if m != "" {
+			blank()
+			for _, l := range wrap("✗ "+m, styleError, w-4) {
+				ls = append(ls, append(line{txt("  ")}, l...))
+			}
 		}
 	}
-	add(styled(styleDim, " Tab/↑↓ move · Space/Enter toggle · click anything · Esc cancels"))
+	blank()
+	ls = append(ls, hints(w, "tab/↑↓", "to navigate", "space", "to toggle", "enter", "to select", "esc", "to cancel")...)
+	pointAt(ls, e.focus)
 
 	focusLine := 0
 	for y, l := range ls {
@@ -610,18 +669,28 @@ func (e *editor) lines() ([]line, int) {
 	return ls, focusLine
 }
 
-func (e *editor) inputLine(add func(...seg), help string) {
-	if e.inputErr != "" {
-		add(styled(styleError, "  "+e.inputErr))
-	} else {
-		add(styled(styleDim, "  "+help))
+// inputBox is the add-folder or add-variable input: a rounded box with a
+// > prompt, then the live error if there is one, else what the keys do.
+func (e *editor) inputBox(keys string, w int) []line {
+	var out []line
+	for _, l := range card([]line{{styled(styleAccent, "> "), seg{text: e.input.View(), id: "input"}}}, w-4, styleAccent) {
+		out = append(out, append(line{txt("   ")}, l...))
 	}
+	if e.inputErr != "" {
+		for _, l := range wrap("✗ "+e.inputErr, styleError, w-6) {
+			out = append(out, append(line{txt("    ")}, l...))
+		}
+	} else {
+		out = append(out, line{txt("    "), styled(styleDim, keys)})
+	}
+	return out
 }
 
-func (e *editor) saveLabel() string {
-	label := "[ ▶ Save & run ]"
-	if e.focus == "save" && e.inputKind == "" {
-		return styleFocus.Render(label)
+// shorten keeps the end of a path, which says the most, within n columns.
+func shorten(s string, n int) string {
+	r := []rune(s)
+	if n < 4 || len(r) <= n {
+		return s
 	}
-	return styleSave.Render(label)
+	return "…" + string(r[len(r)-n+1:])
 }

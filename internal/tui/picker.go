@@ -38,12 +38,21 @@ type picker struct {
 	hits    *lipgloss.Compositor
 }
 
-func (m *picker) Init() tea.Cmd { return nil }
+func (m *picker) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+	case tea.BackgroundColorMsg:
+		applyTheme(msg.IsDark())
+	case tea.MouseMotionMsg:
+		// Like a native list: the row under the mouse is selected.
+		if m.hits != nil {
+			if i, err := strconv.Atoi(strings.TrimPrefix(m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID(), "c:")); err == nil {
+				m.cursor = i
+			}
+		}
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "up", "k", "shift+tab":
@@ -85,36 +94,25 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *picker) View() tea.View {
+	w := 80
+	if m.width > 0 {
+		w = min(max(m.width, 50), 100)
+	}
 	nameWidth := 8
+	var names, details []string
 	for _, c := range m.choices {
-		nameWidth = max(nameWidth, lipgloss.Width(c.Name)+2)
+		nameWidth = max(nameWidth, lipgloss.Width(c.Name)+3)
 	}
-	ls := []line{{styled(styleTitle, " "+m.title)}, {}}
-	for i, c := range m.choices {
-		label := fmt.Sprintf(" %d  %s", i+1, pad(c.Name, nameWidth))
-		if i == m.cursor {
-			label = styleFocus.Render(label)
-		}
-		detail := c.Detail
-		if m.width > 0 {
-			if room := m.width - lipgloss.Width(label) - 3; room > 10 && lipgloss.Width(detail) > room {
-				detail = truncate(detail, room-1) + "…"
-			}
-		}
-		ls = append(ls, line{txt(" "), seg{text: label, id: fmt.Sprintf("c:%d", i)}, styled(styleDim, "  "+detail)})
+	for _, c := range m.choices {
+		names = append(names, pad(c.Name, nameWidth))
+		details = append(details, c.Detail)
 	}
-	ls = append(ls, line{}, line{txt("  "), seg{text: "[ Cancel ]", id: "cancel"}},
-		line{styled(styleDim, " ↑↓ move · Enter or click runs · 1–9 picks · Esc cancels")})
+	ls := banner(m.title, line{styled(styleDim, fmt.Sprintf("%d profiles, none remembered for this folder", len(m.choices)))}, w)
+	ls = append(ls, line{}, section("Which profile should run here?", ""), line{})
+	ls = append(ls, menu(names, details, m.cursor, "c:", w)...)
+	ls = append(ls, line{}, line{txt("   "), seg{text: styleDim.Render("Cancel"), id: "cancel"}}, line{})
+	ls = append(ls, hints(w, "↑↓", "to move", "enter", "to run", "1–9", "to pick", "esc", "to cancel")...)
 	var content string
 	content, m.hits = render(ls, 0, 0)
-	return screen(content, m.title)
-}
-
-// truncate cuts s to at most n runes.
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n])
+	return screen(content, "box")
 }

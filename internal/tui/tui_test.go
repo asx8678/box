@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"image/color"
 	"os"
 	"slices"
 	"strings"
@@ -95,10 +96,11 @@ func TestEditorMouse(t *testing.T) {
 func TestEditorKeyboardFocusOrder(t *testing.T) {
 	e := newTestEditor(t)
 	ids := e.ids()
-	if ids[0] != "wd:rw" || ids[len(ids)-1] != "save" {
+	if ids[0] != "wd:rw" || ids[len(ids)-1] != "cancel" {
 		t.Fatalf("ids %v", ids)
 	}
-	e.Update(press(tea.KeyTab)) // from save wraps to the first widget
+	e.setFocus("cancel")
+	e.Update(press(tea.KeyTab)) // from the last widget wraps to the first
 	if e.focus != "wd:rw" {
 		t.Fatalf("focus %s", e.focus)
 	}
@@ -221,7 +223,7 @@ func TestConfirm(t *testing.T) {
 		t.Error("y didn't confirm")
 	}
 	m = &confirm{title: "t", question: "q?"}
-	clickOn(t, m, func() *lipgloss.Compositor { return m.hits }, "yes")
+	clickOn(t, m, func() *lipgloss.Compositor { return m.hits }, "o:0")
 	if !m.yes {
 		t.Error("clicking Yes didn't confirm")
 	}
@@ -261,4 +263,44 @@ func TestEditorRetickFolderCreatedOnFirstRun(t *testing.T) {
 	if !e.items[2].on {
 		t.Errorf("couldn't re-tick a program folder that doesn't exist yet: %q", e.msg)
 	}
+}
+
+func TestHoverAndTheme(t *testing.T) {
+	e := newTestEditor(t)
+	e.View()
+	for y := 0; y < 60; y++ {
+		for x := 0; x < 100; x++ {
+			if e.hits.Hit(x, y).ID() == "net:on" {
+				e.Update(tea.MouseMotionMsg{X: x, Y: y})
+				if e.hover != "net:on" {
+					t.Fatalf("hover %q", e.hover)
+				}
+				defer applyTheme(true)
+				dark := styleAccent.Render("x")
+				e.Update(tea.BackgroundColorMsg{Color: color.White})
+				if styleAccent.Render("x") == dark {
+					t.Error("a light background didn't switch the palette")
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("net:on not on screen")
+}
+
+func TestPickerHoverSelects(t *testing.T) {
+	m := &picker{title: "t", choices: []Choice{{"a", ""}, {"b", ""}}, chosen: -1}
+	m.View()
+	for y := 0; y < 30; y++ {
+		for x := 0; x < 80; x++ {
+			if m.hits.Hit(x, y).ID() == "c:1" {
+				m.Update(tea.MouseMotionMsg{X: x, Y: y})
+				if m.cursor != 1 {
+					t.Errorf("cursor %d", m.cursor)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("row not on screen")
 }

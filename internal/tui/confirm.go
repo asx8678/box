@@ -24,7 +24,7 @@ type confirm struct {
 	hits            *lipgloss.Compositor
 }
 
-func (m *confirm) Init() tea.Cmd { return nil }
+func (m *confirm) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -35,21 +35,32 @@ func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "n", "N", "esc", "q", "ctrl+c":
 			return m, tea.Quit
-		case "left", "right", "tab", "shift+tab", "h", "l":
+		case "left", "right", "up", "down", "tab", "shift+tab", "h", "l", "j", "k":
 			m.onYes = !m.onYes
 		case "enter", "space":
 			m.yes = m.onYes
 			return m, tea.Quit
+		}
+	case tea.BackgroundColorMsg:
+		applyTheme(msg.IsDark())
+	case tea.MouseMotionMsg:
+		if m.hits != nil {
+			switch m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID() {
+			case "o:0":
+				m.onYes = true
+			case "o:1":
+				m.onYes = false
+			}
 		}
 	case tea.MouseClickMsg:
 		if msg.Mouse().Button != tea.MouseLeft || m.hits == nil {
 			return m, nil
 		}
 		switch m.hits.Hit(msg.Mouse().X, msg.Mouse().Y).ID() {
-		case "yes":
+		case "o:0":
 			m.yes = true
 			return m, tea.Quit
-		case "no":
+		case "o:1":
 			return m, tea.Quit
 		}
 	}
@@ -57,23 +68,23 @@ func (m *confirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *confirm) View() tea.View {
-	ls := []line{{styled(styleTitle, " "+m.title)}, {}}
+	const w = 72
+	ls := banner(m.title, line{styled(styleWarn, "this can't be undone")}, w)
+	ls = append(ls, line{})
 	for _, b := range m.body {
-		ls = append(ls, line{txt("   " + b)})
+		for _, l := range wrap(b, stylePlain, w-4) {
+			ls = append(ls, append(line{txt(" ")}, l...))
+		}
 	}
-	yes, no := "[ Yes ]", "[ No ]"
+	selected := 1
 	if m.onYes {
-		yes = styleFocus.Render(yes)
-	} else {
-		no = styleFocus.Render(no)
+		selected = 0
 	}
-	ls = append(ls, line{},
-		line{styled(styleWarn, " "+m.question)},
-		line{},
-		line{txt("   "), seg{text: yes, id: "yes"}, txt("   "), seg{text: no, id: "no"}},
-		line{},
-		line{styled(styleDim, " y / n · ←→ and Enter · click · Esc means no")})
+	ls = append(ls, line{}, section(m.question, ""), line{})
+	ls = append(ls, menu([]string{"Yes", "No"}, nil, selected, "o:", w)...)
+	ls = append(ls, line{})
+	ls = append(ls, hints(w, "y/n", "to answer", "↑↓", "to move", "enter", "to choose", "esc", "means no")...)
 	var content string
 	content, m.hits = render(ls, 0, 0)
-	return screen(content, m.title)
+	return screen(content, "box")
 }
