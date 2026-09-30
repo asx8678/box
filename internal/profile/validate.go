@@ -52,6 +52,12 @@ func (p Profile) Validate(program string) error {
 		add("workdir.mode must be \"rw\" or \"ro\", not %q", p.Workdir.Mode)
 	}
 
+	for _, t := range p.Tools {
+		if !ValidName(t) {
+			add("tools: %q is not a command name", t)
+		}
+	}
+
 	seen := map[string]string{}
 	checkPaths := func(section string, paths []string) {
 		for _, path := range paths {

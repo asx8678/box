@@ -93,6 +93,9 @@ func summary(p profile.Profile, folders int) string {
 	}
 	add("rw:", p.Home.RW, p.Extra.RW)
 	add("ro:", p.Home.RO, p.Extra.RO, p.System.ExtraRO)
+	if len(p.Tools) > 0 {
+		parts = append(parts, "tools: "+strings.Join(p.Tools, ", "))
+	}
 	if len(p.Env.Pass) > 0 {
 		parts = append(parts, "env: "+strings.Join(p.Env.Pass, ", "))
 	}

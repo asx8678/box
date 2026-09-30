@@ -6,6 +6,16 @@ Draft for review · Sep 30, 2026 · based on [box — Architecture & Implementat
 
 This plan checks the scope of the architecture plan, corrects the parts that don't hold, and splits the work into milestones with acceptance criteria. It repeats what an implementer needs (CLI, profile schema, sandbox recipe, safety rules), so it can be followed without the architecture plan open.
 
+## Status (Sep 30, 2026)
+
+- **Written:** M1–M5, and the code part of M6. M1 and M2 were unit-tested on macOS; M3 to M6 were compiled and vetted only. The end-to-end suite (`make test-linux`) has not run on Linux yet.
+- **M6 without real runs:** the changes came from the verified facts in section 2, not from running programs:
+  - a generic `tools` list mounts the install folders of the commands a program runs;
+  - program folders are always read-only outside the project (this fixed Kiro Crew's venv being writable under a read-write `~/.kiro`);
+  - AppImages get `APPIMAGE_EXTRACT_AND_RUN=1`, and snaps are refused (126);
+  - the kiro-cli and kirocrew presets use `tools`.
+- **Still open:** the M0 spikes on WSL (terminal and Ctrl+C, interop, `AF_VSOCK`, Landlock), which decide the B3 init and S3, and the real-program runs in M6.
+
 ## 1. Scope verdict
 
 - **The design holds, and nothing in it has to be specific to one program.** A short-lived Go launcher that resolves a TOML profile and then `exec`s `bwrap` is the right shape. Keep it generic: every program gets the same handling (program lookup, private home, folders you tick). Presets are optional data files for the few programs named in the goals, and no box code knows about any particular program (S13).

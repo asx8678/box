@@ -1,10 +1,15 @@
 # Kiro Crew: writes ~/.kiro/agents and ~/.kiro/settings/mcp.json, so ~/.kiro
-# must be read-write; it runs kiro-cli from ~/.local/bin and uses its login.
+# is read-write, which also lets a boxed agent change Kiro CLI's global
+# config (plan D3). Its own venv (~/.kiro/crew-venv or pipx) stays read-only:
+# program folders always are. It runs kiro-cli and uses its login; its
+# gateway listens on 127.0.0.1:5476, reachable from the host with network on.
+# Its agent sandbox needs nested user namespaces (sandbox.strict stays off).
 network = true
+
+tools = ["kiro-cli", "node", "npx", "uv", "uvx"]
 
 [home]
 rw = ["~/.kiro", "~/.local/share/kiro-cli", "~/workplace/kirocrew-workspace"]
-ro = ["~/.local/bin"]
 
 [env]
 pass = ["KIRO_API_KEY", "AWS_PROFILE"]

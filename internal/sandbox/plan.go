@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -49,6 +50,7 @@ type Input struct {
 	Program     string   // the invoked program path
 	ProgramDirs []string // host folders the program needs read-only
 	Args        []string // passed to the program untouched
+	ProgramEnv  []string // KEY=VALUE the program's kind needs, such as AppImage extraction
 	Network     *bool    // --net / --no-net override for this run
 	// LegacyTIOCSTI is /proc/sys/dev/tty/legacy_tiocsti: "0" means the
 	// kernel already blocks terminal injection; "1" or "" (unknown) means
@@ -171,22 +173,6 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		}
 	}
 
-	// The program's own folders, read-only, unless something already
-	// covers them with the same mount.
-	for _, dir := range in.ProgramDirs {
-		c, err := profile.Canonical(h, dir)
-		if err != nil {
-			return nil, err
-		}
-		if b.covered(c) {
-			continue
-		}
-		if err := b.prot.CheckMount(h, c); err != nil {
-			return nil, err
-		}
-		b.add(ROBind, c, c)
-	}
-
 	for _, raw := range p.Extra.RW {
 		if err := b.hostPath("extra.rw", raw, home, Bind, true); err != nil {
 			return nil, err
@@ -221,6 +207,29 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		}
 	} else {
 		b.add(ROBind, wd, wd)
+	}
+
+	// The program's own folders, and those of the tools it runs, are always
+	// read-only: a program that can rewrite itself changes what runs
+	// outside the box next time. Only folders inside the project keep the
+	// project's mode. A read-write folder that is exactly a program folder
+	// becomes read-only; one that contains it gets a read-only mount on top.
+	for _, dir := range in.ProgramDirs {
+		c, err := profile.Canonical(h, dir)
+		if err != nil {
+			return nil, err
+		}
+		if profile.Within(c, wd) || b.readOnlyCovers(c) {
+			continue
+		}
+		if err := b.prot.CheckMount(h, c); err != nil {
+			return nil, err
+		}
+		if i := slices.IndexFunc(b.mounts, func(m Mount) bool { return m.Dest == c }); i >= 0 {
+			b.mounts[i].Kind = ROBind
+			continue
+		}
+		b.add(ROBind, c, c)
 	}
 
 	// Parents mount before children, so nothing is hidden by a later,
@@ -259,7 +268,7 @@ func Build(h host.Host, in Input) (*Plan, error) {
 	if p.Sandbox.Strict {
 		plan.Flags = append(plan.Flags, "--disable-userns")
 	}
-	plan.Env = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome))
+	plan.Env = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), in.ProgramEnv)
 	plan.Info = fmt.Appendf(nil, "program=%s\nprofile=%s\nnetwork=%t\nworkdir=%s\n",
 		p.Program, in.ProfileName, network, wd)
 	return plan, nil
@@ -306,15 +315,17 @@ func (b *builder) hostPath(section, raw, home string, k Kind, mustExist bool) er
 	return nil
 }
 
-// covered reports whether dir is already mounted read-only at the same
-// path, directly or through a parent, so a program folder adds nothing.
-func (b *builder) covered(dir string) bool {
-	for _, m := range b.mounts {
-		if (m.Kind == ROBind || m.Kind == Bind) && m.Src == m.Dest && profile.Within(dir, m.Dest) {
-			return true
+// readOnlyCovers reports whether the deepest same-path mount containing
+// dir is read-only, so dir is already read-only inside.
+func (b *builder) readOnlyCovers(dir string) bool {
+	best := -1
+	for i, m := range b.mounts {
+		if (m.Kind == ROBind || m.Kind == Bind) && m.Src == m.Dest && profile.Within(dir, m.Dest) &&
+			(best < 0 || depth(m.Dest) >= depth(b.mounts[best].Dest)) {
+			best = i
 		}
 	}
-	return false
+	return best >= 0 && b.mounts[best].Kind == ROBind
 }
 
 // protectGit keeps .git/config and .git/hooks read-only in a read-write
@@ -388,7 +399,7 @@ var baseEnv = []string{"TERM", "COLORTERM", "LANG", "LANGUAGE", "TZ", "NO_COLOR"
 
 // buildEnv is the program's whole environment. box passes it straight to
 // execve, so nothing else from the host leaks in.
-func buildEnv(h host.Host, p profile.Profile, name, home, wd, path string) []string {
+func buildEnv(h host.Host, p profile.Profile, name, home, wd, path string, programEnv []string) []string {
 	env := map[string]string{
 		"HOME":        home,
 		"PATH":        path,
@@ -408,6 +419,11 @@ func buildEnv(h host.Host, p profile.Profile, name, home, wd, path string) []str
 	}
 	for _, k := range p.Env.Pass {
 		if v, ok := h.LookupEnv(k); ok {
+			env[k] = v
+		}
+	}
+	for _, kv := range programEnv {
+		if k, v, ok := strings.Cut(kv, "="); ok {
 			env[k] = v
 		}
 	}

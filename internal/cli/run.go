@@ -182,6 +182,14 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 		bwrap = "bwrap"
 	}
 	build := func(p profile.Profile, name string) (*sandbox.Plan, error) {
+		// The program's folders, plus those of the tools it runs; tools
+		// that aren't installed are skipped.
+		progDirs := slices.Clone(prog.Dirs)
+		for _, tool := range p.Tools {
+			if t, err := sandbox.Lookup(h, tool, wd); err == nil {
+				progDirs = append(progDirs, t.Dirs...)
+			}
+		}
 		return sandbox.Build(h, sandbox.Input{
 			Profile:       p,
 			ProfileName:   name,
@@ -189,7 +197,8 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 			Protected:     prot,
 			Workdir:       realWd,
 			Program:       prog.Path,
-			ProgramDirs:   prog.Dirs,
+			ProgramDirs:   progDirs,
+			ProgramEnv:    prog.Env,
 			Args:          args,
 			Network:       network,
 			LegacyTIOCSTI: probe.LegacyTIOCSTI,

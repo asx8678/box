@@ -23,6 +23,7 @@ type Program struct {
 	Name string   // profile key: the basename of what was typed
 	Path string   // the invoked path, run as-is inside the sandbox
 	Dirs []string // host folders to mount read-only, outside the system paths
+	Env  []string // KEY=VALUE the program's kind needs inside the box
 }
 
 // LookupError carries the exit code for a program that can't be run.
@@ -81,6 +82,15 @@ func Lookup(h host.Host, name, wd string) (Program, error) {
 	if windowsDrive(real) || bytes.HasPrefix(head, []byte("MZ")) {
 		return Program{}, lookupErr(ExitCannotRun,
 			"%s is a Windows program: it would run outside Linux, where box can't sandbox it", path)
+	}
+	if profile.Within(path, "/snap") || real == "/usr/bin/snap" {
+		return Program{}, lookupErr(ExitCannotRun,
+			"%s is a snap: snaps run in their own confinement and can't start inside box; install a non-snap build", path)
+	}
+	// An AppImage mounts itself with FUSE, which the sandbox doesn't have;
+	// this makes it extract to /tmp instead.
+	if len(head) >= 11 && bytes.HasPrefix(head, []byte("\x7fELF")) && bytes.Equal(head[8:11], []byte("AI\x02")) {
+		prog.Env = append(prog.Env, "APPIMAGE_EXTRACT_AND_RUN=1")
 	}
 	prog.Path = path
 

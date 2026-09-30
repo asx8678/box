@@ -9,7 +9,7 @@ box kiro-cli
 
 The first time, a one-screen editor (mouse or keyboard) asks what the program may use and saves the answers as a profile. After that, `box kiro-cli` starts straight away. box then replaces itself with `bwrap`, so nothing of box keeps running and the program gets the terminal directly.
 
-> **Status:** milestones 1–5 of [the implementation plan](docs/implementation-plan.md) are written. The unit tests ran for milestones 1–2 on macOS; the end-to-end tests with real bubblewrap haven't run yet, and milestones 3–5 are compiled but untested. Run `make test-linux` on the WSL machine before relying on it.
+> **Status:** milestones 1–5, and the code part of milestone 6, of [the implementation plan](docs/implementation-plan.md) are written. The unit tests ran for milestones 1–2 on macOS; the end-to-end tests with real bubblewrap haven't run yet, and milestones 3–5 are compiled but untested. Run `make test-linux` on the WSL machine before relying on it.
 
 ## Install
 
@@ -67,7 +67,7 @@ Exit codes:
 
 Profiles are TOML files in `~/.config/box/profiles/<program>/<name>.toml`. That folder is never visible inside a sandbox, so a program can't change its own permissions. Each profile gets a private home folder in `~/.local/share/box/homes/<program>/<name>/`.
 
-Any program starts from the same default: project read-write, network off, nothing else. The editor suggests existing folders named after the program, such as `~/.<name>` and `~/.config/<name>`. Presets pre-fill `kiro-cli`, `kirocrew` and the shells.
+Any program starts from the same default: project read-write, network off, nothing else. A profile can also list `tools`, other commands the program runs (such as `kiro-cli`, `node` or `uvx` for MCP servers); box mounts their install folders read-only, like the program's own. Program folders are always read-only outside the project, so a boxed program can't rewrite itself or its tools. AppImages are extracted to `/tmp` instead of mounted with FUSE, and snaps are refused, because they can't start inside a sandbox. The editor suggests existing folders named after the program, such as `~/.<name>` and `~/.config/<name>`. Presets pre-fill `kiro-cli`, `kirocrew` and the shells.
 
 ## Known limits
 

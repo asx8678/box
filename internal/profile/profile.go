@@ -21,15 +21,20 @@ const Version = 1
 // Profile is one program's sandbox settings, stored as
 // ~/.config/box/profiles/<program>/<name>.toml.
 type Profile struct {
-	Version int     `toml:"version"`
-	Program string  `toml:"program"`
-	Network bool    `toml:"network"`
-	Workdir Workdir `toml:"workdir"`
-	Home    Mounts  `toml:"home"`
-	Extra   Mounts  `toml:"extra"`
-	Env     Env     `toml:"env"`
-	System  System  `toml:"system"`
-	Sandbox Sandbox `toml:"sandbox"`
+	Version int    `toml:"version"`
+	Program string `toml:"program"`
+	Network bool   `toml:"network"`
+	// Tools are other commands the program runs (kiro-cli for Kiro Crew,
+	// node or uvx for MCP servers). Each is looked up on the host PATH like
+	// the program and its install folder mounted read-only; missing ones
+	// are skipped.
+	Tools   []string `toml:"tools"`
+	Workdir Workdir  `toml:"workdir"`
+	Home    Mounts   `toml:"home"`
+	Extra   Mounts   `toml:"extra"`
+	Env     Env      `toml:"env"`
+	System  System   `toml:"system"`
+	Sandbox Sandbox  `toml:"sandbox"`
 }
 
 // Workdir is how the folder box runs in is mounted.

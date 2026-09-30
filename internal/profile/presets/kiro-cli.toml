@@ -1,6 +1,13 @@
-# Kiro CLI: login state read-write; global config read-only, so a boxed agent
-# can't add MCP servers or hooks that run outside the box (plan decision D3).
+# Kiro CLI (kiro-cli, kiro-cli-chat and kiro-cli-term in ~/.local/bin; its
+# folder is mounted read-only by program lookup).
+# Login state is read-write. The global config is read-only, so a boxed
+# agent can't add MCP servers or hooks that run outside the box (plan D3).
+# Inside box on WSL the browser can't open: log in with
+#   kiro-cli login --use-device-flow   (or pass KIRO_API_KEY)
 network = true
+
+# MCP servers are usually started through these; missing ones are skipped.
+tools = ["node", "npx", "uv", "uvx"]
 
 [home]
 rw = ["~/.local/share/kiro-cli"]
