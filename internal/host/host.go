@@ -3,6 +3,7 @@
 package host
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -21,6 +22,8 @@ type Host interface {
 	Stat(path string) (fs.FileInfo, error)
 	LookPath(file string) (string, error)
 	ReadFile(path string) ([]byte, error)
+	// ReadPrefix reads at most n bytes from the start of a file.
+	ReadPrefix(path string, n int) ([]byte, error)
 }
 
 // OS is the real machine.
@@ -36,3 +39,17 @@ func (OS) Lstat(path string) (fs.FileInfo, error)   { return os.Lstat(path) }
 func (OS) Stat(path string) (fs.FileInfo, error)    { return os.Stat(path) }
 func (OS) LookPath(file string) (string, error)     { return exec.LookPath(file) }
 func (OS) ReadFile(path string) ([]byte, error)     { return os.ReadFile(path) }
+
+func (OS) ReadPrefix(path string, n int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	m, err := io.ReadFull(f, buf)
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		err = nil
+	}
+	return buf[:m], err
+}

@@ -9,13 +9,13 @@ import (
 func (p *Plan) Args() []string {
 	args := append([]string(nil), p.Flags...)
 	for _, m := range p.Mounts {
-		args = append(args, m.args()...)
+		args = append(args, m.args(p.InfoFD)...)
 	}
 	args = append(args, "--chdir", p.Chdir, "--")
 	return append(args, p.Command...)
 }
 
-func (m Mount) args() []string {
+func (m Mount) args(fd int) []string {
 	switch m.Kind {
 	case ROBind:
 		return []string{"--ro-bind", m.Src, m.Dest}
@@ -32,7 +32,7 @@ func (m Mount) args() []string {
 	case Tmpfs:
 		return []string{"--tmpfs", m.Dest}
 	case ROBindData:
-		return []string{"--ro-bind-data", strconv.Itoa(InfoFD), m.Dest}
+		return []string{"--ro-bind-data", strconv.Itoa(fd), m.Dest}
 	}
 	panic("sandbox: unknown mount kind")
 }
@@ -60,11 +60,11 @@ func (p *Plan) DryRun(bwrap string) string {
 	}
 	line(p.Flags...)
 	for _, m := range p.Mounts {
-		line(m.args()...)
+		line(m.args(DryRunInfoFD)...)
 	}
 	line("--chdir", p.Chdir)
 	line(append([]string{"--"}, p.Command...)...)
-	b.WriteString(" \\\n  3<<<")
+	b.WriteString(" \\\n  " + strconv.Itoa(DryRunInfoFD) + "<<<")
 	b.WriteString(Quote(strings.TrimSuffix(string(p.Info), "\n")))
 	b.WriteByte('\n')
 	return b.String()

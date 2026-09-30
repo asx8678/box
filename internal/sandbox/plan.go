@@ -35,8 +35,8 @@ type Mount struct {
 	Dest string
 }
 
-// InfoFD is the file descriptor that carries /run/box/profile to bwrap.
-const InfoFD = 3
+// DryRunInfoFD is the file descriptor the dry run uses for /run/box/profile.
+const DryRunInfoFD = 3
 
 // Input is everything the plan is built from. Program lookup and machine
 // probing happen before this, so Build is pure given the host.
@@ -65,9 +65,10 @@ type Plan struct {
 	Env     []string // KEY=VALUE, sorted; the program's whole environment
 	Command []string
 	Info    []byte // contents of /run/box/profile
-	// Writable lists the host folders mounted read-write, for the
-	// mount-point preparation done before exec.
-	Writable []string
+	InfoFD  int    // the fd that carries Info to bwrap; exec sets the real one
+	// Create lists the program's own folders (and the private home) that
+	// don't exist yet; they are created with mode 0700 before exec.
+	Create []string
 	// NewSession is set when box had to fall back to --new-session.
 	NewSession bool
 }
@@ -156,7 +157,9 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		return nil, err
 	}
 	b.add(Bind, privateHome, home)
-	b.writable = append(b.writable, privateHome)
+	if _, err := h.Stat(privateHome); err != nil {
+		b.create = append(b.create, privateHome)
+	}
 	for _, raw := range p.Home.RW {
 		if err := b.hostPath("home.rw", raw, home, Bind, false); err != nil {
 			return nil, err
@@ -211,7 +214,6 @@ func Build(h host.Host, in Input) (*Plan, error) {
 			return nil, err
 		}
 		b.add(Bind, wd, wd)
-		b.writable = append(b.writable, wd)
 		if p.Workdir.ProtectGit {
 			if err := b.protectGit(wd); err != nil {
 				return nil, err
@@ -239,10 +241,11 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		network = *in.Network
 	}
 	plan := &Plan{
-		Mounts:   b.mounts,
-		Chdir:    wd,
-		Command:  append([]string{in.Program}, in.Args...),
-		Writable: b.writable,
+		Mounts:  b.mounts,
+		Chdir:   wd,
+		Command: append([]string{in.Program}, in.Args...),
+		InfoFD:  DryRunInfoFD,
+		Create:  b.create,
 	}
 	plan.Flags = []string{"--unshare-all"}
 	if network {
@@ -263,10 +266,10 @@ func Build(h host.Host, in Input) (*Plan, error) {
 }
 
 type builder struct {
-	h        host.Host
-	prot     profile.Protected
-	mounts   []Mount
-	writable []string
+	h      host.Host
+	prot   profile.Protected
+	mounts []Mount
+	create []string
 }
 
 func (b *builder) add(k Kind, src, dest string) {
@@ -285,10 +288,11 @@ func (b *builder) hostPath(section, raw, home string, k Kind, mustExist bool) er
 	if err != nil {
 		return fmt.Errorf("%s: %w", section, err)
 	}
-	if mustExist {
-		if _, err := b.h.Stat(c); err != nil {
+	if _, err := b.h.Stat(c); err != nil {
+		if mustExist {
 			return fmt.Errorf("%s: %s doesn't exist", section, raw)
 		}
+		b.create = append(b.create, c)
 	}
 	if err := b.prot.CheckMount(b.h, c); err != nil {
 		return fmt.Errorf("%s: %w", section, err)
@@ -297,7 +301,6 @@ func (b *builder) hostPath(section, raw, home string, k Kind, mustExist bool) er
 		if err := b.prot.CheckRW(c); err != nil {
 			return fmt.Errorf("%s: %w", section, err)
 		}
-		b.writable = append(b.writable, c)
 	}
 	b.add(k, c, c)
 	return nil

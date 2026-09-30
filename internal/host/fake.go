@@ -207,6 +207,14 @@ func (f *Fake) ReadFile(p string) ([]byte, error) {
 	return append([]byte(nil), n.data...), nil
 }
 
+func (f *Fake) ReadPrefix(p string, n int) ([]byte, error) {
+	data, err := f.ReadFile(p)
+	if len(data) > n {
+		data = data[:n]
+	}
+	return data, err
+}
+
 type info struct {
 	name string
 	n    *node
