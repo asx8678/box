@@ -42,7 +42,11 @@ program untouched.
   --doctor     check bubblewrap and this machine, then exit
   --version    print box's version
 
-Exit codes: the program's own; 125 box error; 126 can't run; 127 not found.
+With no profile yet, an editor opens (mouse or keyboard); with several,
+a picker. Profiles live in ~/.config/box/profiles/<program>/.
+
+Exit codes: the program's own; 125 box error (nothing ran); 126 can't run
+or a Windows program; 127 not found.
 `
 
 type options struct {
@@ -338,7 +342,15 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 		case 1:
 			name = names[0]
 		default:
-			return selection{}, fmt.Errorf("%s has several profiles (%s); pick one with -p NAME", program, strings.Join(names, ", "))
+			if !canEdit {
+				return selection{}, fmt.Errorf("%s has several profiles (%s) and none is remembered for this folder; pick one with -p NAME",
+					program, strings.Join(names, ", "))
+			}
+			picked, err := pick(dirs, folders, program, names)
+			if err != nil {
+				return selection{}, err
+			}
+			name = picked
 		}
 	}
 	if !slices.Contains(names, name) {
@@ -352,6 +364,27 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 		return selection{}, noEditor("-e")
 	}
 	return selection{name: name, profile: p, edit: o.edit}, nil
+}
+
+// pick shows the profile picker with a one-line summary of each profile.
+func pick(dirs profile.Dirs, folders *profile.Folders, program string, names []string) (string, error) {
+	used := map[string]int{}
+	for _, progs := range folders.Entries {
+		used[progs[program]]++
+	}
+	var choices []tui.Choice
+	for _, n := range names {
+		detail := "error: can't read it"
+		if p, err := profile.Load(profile.Path(dirs, program, n), program); err == nil {
+			detail = summary(p, used[n])
+		}
+		choices = append(choices, tui.Choice{Name: n, Detail: detail})
+	}
+	name, err := tui.Pick(fmt.Sprintf("box · %s · which profile?", program), choices)
+	if errors.Is(err, tui.ErrCancelled) {
+		return "", errors.New("cancelled; nothing was run")
+	}
+	return name, err
 }
 
 // checkPath is the editor's live check for a folder being added or

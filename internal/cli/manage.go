@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/asx8678/box/internal/profile"
+	"github.com/asx8678/box/internal/tui"
 )
 
 // isTerminal reports whether f is a terminal (a character device).
@@ -23,15 +23,10 @@ func interactive() bool {
 	return isTerminal(os.Stdin) && isTerminal(os.Stdout)
 }
 
-// ask prints question and returns true only for an explicit yes.
-func ask(in *bufio.Reader, out io.Writer, question string) bool {
-	fmt.Fprintf(out, "%s [y/N] ", question)
-	line, _ := in.ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true
-	}
-	return false
+// ask shows the confirmation screen; only an explicit yes returns true.
+func ask(title string, body []string, question string) bool {
+	yes, err := tui.Confirm(title, body, question)
+	return err == nil && yes
 }
 
 // list prints every program with its profiles and a one-line summary.
@@ -143,20 +138,22 @@ func reset(dirs profile.Dirs, program string, yes bool, stdout, stderr io.Writer
 		return 0
 	}
 
-	var in *bufio.Reader
+	title := "box · reset " + program
 	if !yes {
 		if !interactive() {
 			return fail(stderr, fmt.Errorf("reset needs confirmation; run it in a terminal or add -y"))
 		}
-		in = bufio.NewReader(os.Stdin)
-		what := fmt.Sprintf("Delete %d profile(s) of %s", len(names), program)
+		var body []string
 		if len(names) > 0 {
-			what += " (" + strings.Join(names, ", ") + ")"
+			body = append(body, fmt.Sprintf("Profiles to delete: %s", strings.Join(names, ", ")))
 		}
 		if remembered > 0 {
-			what += fmt.Sprintf(" and forget it in %d folder(s)", remembered)
+			body = append(body, fmt.Sprintf("Folders that will forget it: %d", remembered))
 		}
-		if !ask(in, stdout, what+"?") {
+		if homeErr == nil {
+			body = append(body, "Private home folders are asked about separately.")
+		}
+		if !ask(title, body, fmt.Sprintf("Reset %s?", program)) {
 			fmt.Fprintln(stdout, "nothing changed")
 			return ExitBox
 		}
@@ -171,7 +168,8 @@ func reset(dirs profile.Dirs, program string, yes bool, stdout, stderr io.Writer
 	fmt.Fprintf(stdout, "reset %s\n", program)
 
 	if homeErr == nil {
-		if in != nil && ask(in, stdout, fmt.Sprintf("Also delete its private home folders in %s (login state, caches)?", homes)) {
+		body := []string{homes, "They hold login state, caches and unpacked apps. This can't be undone."}
+		if !yes && ask(title, body, "Also delete the private home folders?") {
 			if err := os.RemoveAll(homes); err != nil {
 				return fail(stderr, err)
 			}
