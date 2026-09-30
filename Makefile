@@ -1,8 +1,9 @@
 GO      ?= go
 LDFLAGS := -s -w
+PREFIX  ?= $(HOME)/.local
 export CGO_ENABLED := 0
 
-.PHONY: build build-linux test test-linux vet golden clean
+.PHONY: build build-linux install test test-linux vet golden clean
 
 build:
 	$(GO) build -trimpath -ldflags='$(LDFLAGS)' -o bin/box .
@@ -11,6 +12,11 @@ build:
 build-linux:
 	GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags='$(LDFLAGS)' -o bin/box-linux-amd64 .
 	GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags='$(LDFLAGS)' -o bin/box-linux-arm64 .
+
+# Installs the binary built for this machine; run it on the Linux/WSL machine.
+install: build
+	install -d $(PREFIX)/bin
+	install -m 755 bin/box $(PREFIX)/bin/box
 
 test:
 	$(GO) test ./...

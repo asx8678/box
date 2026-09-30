@@ -68,6 +68,8 @@ func input(t *testing.T, f *host.Fake, p profile.Profile) Input {
 		ProgramDirs:   []string{"/home/u/.local/bin"},
 		Args:          []string{"chat", "it's a test"},
 		LegacyTIOCSTI: "0",
+		Arch:          "amd64",
+		Self:          "/home/u/.local/bin/box",
 	}
 }
 
@@ -238,15 +240,18 @@ func TestPathDropsFoldersThatAreNotMounted(t *testing.T) {
 func TestFlags(t *testing.T) {
 	off := false
 	tests := []struct {
-		name   string
-		change func(*Input)
-		want   []string
+		name       string
+		change     func(*Input)
+		want       []string
+		wantFilter Filter
 	}{
-		{"kernel blocks TIOCSTI", func(in *Input) {}, []string{"--unshare-all", "--share-net", "--die-with-parent"}},
-		{"legacy TIOCSTI", func(in *Input) { in.LegacyTIOCSTI = "1" }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--new-session"}},
-		{"unknown TIOCSTI", func(in *Input) { in.LegacyTIOCSTI = "" }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--new-session"}},
-		{"--no-net", func(in *Input) { in.Network = &off }, []string{"--unshare-all", "--die-with-parent"}},
-		{"strict", func(in *Input) { in.Profile.Sandbox.Strict = true }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--disable-userns"}},
+		{"kernel blocks TIOCSTI", func(in *Input) {}, []string{"--unshare-all", "--share-net", "--die-with-parent"}, Filter{Vsock: true}},
+		{"legacy TIOCSTI", func(in *Input) { in.LegacyTIOCSTI = "1" }, []string{"--unshare-all", "--share-net", "--die-with-parent"}, Filter{TIOCSTI: true, Vsock: true}},
+		{"unknown TIOCSTI", func(in *Input) { in.LegacyTIOCSTI = "" }, []string{"--unshare-all", "--share-net", "--die-with-parent"}, Filter{TIOCSTI: true, Vsock: true}},
+		{"no filter possible", func(in *Input) { in.LegacyTIOCSTI = "1"; in.Arch = "riscv64" }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--new-session"}, Filter{}},
+		{"not WSL", func(in *Input) { in.Protected.WSL = false }, []string{"--unshare-all", "--share-net", "--die-with-parent"}, Filter{}},
+		{"--no-net", func(in *Input) { in.Network = &off }, []string{"--unshare-all", "--die-with-parent"}, Filter{Vsock: true}},
+		{"strict", func(in *Input) { in.Profile.Sandbox.Strict = true }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--disable-userns"}, Filter{Vsock: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -260,7 +265,77 @@ func TestFlags(t *testing.T) {
 			if !slices.Equal(plan.Flags, tt.want) {
 				t.Errorf("flags %v, want %v", plan.Flags, tt.want)
 			}
+			if plan.Filter != tt.wantFilter {
+				t.Errorf("filter %+v, want %+v", plan.Filter, tt.wantFilter)
+			}
+			if hasSeccomp := slices.Contains(plan.Args(), "--seccomp"); hasSeccomp != tt.wantFilter.Any() {
+				t.Errorf("--seccomp in args: %v, want %v", hasSeccomp, tt.wantFilter.Any())
+			}
 		})
+	}
+}
+
+func TestProgramFoldersAreAlwaysReadOnly(t *testing.T) {
+	f := machine()
+	f.Dir("/home/u/.kiro/crew-venv/bin").Dir("/home/u/tools").Dir("/home/u/code/proj/scripts")
+	p := profile.Default("kirocrew")
+	p.Home.RW = []string{"~/.kiro"}
+	p.Extra.RW = []string{"~/tools"}
+	in := input(t, f, p)
+	in.ProgramDirs = []string{"/home/u/.kiro/crew-venv", "/home/u/tools", "/home/u/code/proj/scripts"}
+	plan, err := Build(f, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kiro := indexOf(t, plan, Bind, "/home/u/.kiro")
+	if venv := indexOf(t, plan, ROBind, "/home/u/.kiro/crew-venv"); venv < kiro {
+		t.Errorf("the read-only venv (#%d) must mount after ~/.kiro (#%d)", venv, kiro)
+	}
+	indexOf(t, plan, ROBind, "/home/u/tools") // a read-write folder that is a program folder
+	for _, m := range plan.Mounts {
+		if m.Dest == "/home/u/code/proj/scripts" {
+			t.Errorf("a program folder inside the project keeps the project's mode, got %+v", m)
+		}
+	}
+}
+
+func TestInitAndLandlock(t *testing.T) {
+	f := machine()
+	p := preset(t, "kiro-cli")
+	p.Sandbox.Init = true
+	p.Sandbox.Landlock = true
+	in := input(t, f, p)
+	plan, err := Build(f, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := indexOf(t, plan, ROBind, InitPath); plan.Mounts[i].Src != "/home/u/.local/bin/box" {
+		t.Errorf("init mounted from %s", plan.Mounts[i].Src)
+	}
+	want := []string{InitPath, "--box-init", "--", "/home/u/.local/bin/kiro-cli", "chat", "it's a test"}
+	if !slices.Equal(plan.Command, want) {
+		t.Errorf("command %q, want %q", plan.Command, want)
+	}
+	if !plan.Landlock {
+		t.Error("landlock should be on with network on")
+	}
+	off := false
+	in.Network = &off
+	if plan, _ := Build(f, in); plan.Landlock {
+		t.Error("landlock is only needed with network on")
+	}
+}
+
+func TestProgramEnv(t *testing.T) {
+	f := machine()
+	in := input(t, f, profile.Default("mytool"))
+	in.ProgramEnv = []string{"APPIMAGE_EXTRACT_AND_RUN=1"}
+	plan, err := Build(f, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(plan.Env, "APPIMAGE_EXTRACT_AND_RUN=1") {
+		t.Errorf("program env missing: %v", plan.Env)
 	}
 }
 

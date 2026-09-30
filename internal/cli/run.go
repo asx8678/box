@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -119,6 +120,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
+	if err := profile.CheckConfigDir(dirs); err != nil {
+		return fail(stderr, err)
+	}
 	switch {
 	case o.doctor:
 		return doctor(dirs, stdout, stderr)
@@ -155,9 +159,16 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 		return ExitBox, err
 	}
 
+	// A dry run only prints the command, so a machine that can't run
+	// sandboxes (no bwrap, blocked namespaces, not Linux) still gets one.
 	probe, perr := sandbox.RunProbe(dirs.State, false)
-	if perr != nil && !(o.dryRun && errors.Is(perr, sandbox.ErrNeedsLinux)) {
-		return ExitBox, perr
+	if perr != nil {
+		if !o.dryRun {
+			return ExitBox, perr
+		}
+		if !errors.Is(perr, sandbox.ErrNeedsLinux) {
+			fmt.Fprintf(os.Stderr, "box: warning: %v\n     (printing the command anyway)\n", perr)
+		}
 	}
 
 	realWd, err := profile.Canonical(h, wd)
@@ -202,6 +213,8 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 			Args:          args,
 			Network:       network,
 			LegacyTIOCSTI: probe.LegacyTIOCSTI,
+			Arch:          runtime.GOARCH,
+			Self:          self,
 		})
 	}
 
@@ -259,6 +272,7 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	if err != nil {
 		return ExitBox, err
 	}
+	plan.FlushInput = sel.edit || sel.picked
 	if o.dryRun {
 		fmt.Fprint(stdout, plan.DryRun(bwrap))
 		return 0, nil
@@ -283,6 +297,7 @@ type selection struct {
 	profile profile.Profile
 	edit    bool // open the editor before running
 	isNew   bool // the editor is creating this profile
+	picked  bool // the picker was shown
 }
 
 // choose picks the profile: -n creates it, -p names it, then folder
@@ -331,6 +346,7 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 		return selection{}, err
 	}
 	name := o.profile
+	pickedShown := false
 	if name == "" {
 		if remembered, ok := folders.Get(wd, program); ok && slices.Contains(names, remembered) {
 			name = remembered
@@ -360,6 +376,7 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 				return selection{}, err
 			}
 			name = picked
+			pickedShown = true
 		}
 	}
 	if !slices.Contains(names, name) {
@@ -372,7 +389,7 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 	if o.edit && !canEdit {
 		return selection{}, noEditor("-e")
 	}
-	return selection{name: name, profile: p, edit: o.edit}, nil
+	return selection{name: name, profile: p, edit: o.edit, picked: pickedShown}, nil
 }
 
 // pick shows the profile picker with a one-line summary of each profile.
@@ -459,10 +476,20 @@ func doctor(dirs profile.Dirs, stdout, stderr io.Writer) int {
 	show("wsl", fmt.Sprint(p.WSL))
 	tiocsti := "blocked by the kernel"
 	if p.LegacyTIOCSTI != "0" {
-		tiocsti = "allowed: box will detach programs from the terminal"
+		tiocsti = "allowed by the kernel: box's seccomp filter blocks it"
+		if !sandbox.SeccompSupported(runtime.GOARCH) {
+			tiocsti = "allowed: box will detach programs from the terminal"
+		}
 	}
 	show("terminal injection", tiocsti)
 	show("apparmor userns limit", p.AppArmorUserns)
+	landlock := "not available"
+	if abi := sandbox.LandlockABI(); abi >= 6 {
+		landlock = fmt.Sprintf("ABI %d: sandbox.landlock can block abstract sockets", abi)
+	} else if abi > 0 {
+		landlock = fmt.Sprintf("ABI %d: too old for sandbox.landlock (needs 6, Linux 6.12+)", abi)
+	}
+	show("landlock", landlock)
 	if p.Version != "" && older(p.Version, "0.12.0") {
 		fmt.Fprintln(stdout, "note: bwrap before 0.12.0 has CVE-2026-87766 unless your distro patched it;"+
 			" box guards against it, but a newer bwrap in /usr/local/bin is better")

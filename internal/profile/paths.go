@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/asx8678/box/internal/host"
 )
@@ -107,4 +109,27 @@ func Within(child, parent string) bool {
 // overlaps reports whether a and b are the same path or one contains the other.
 func overlaps(a, b string) bool {
 	return Within(a, b) || Within(b, a)
+}
+
+// CheckConfigDir refuses box's config folder if anyone else could change
+// it: whoever can write there decides what every sandbox allows. A folder
+// that doesn't exist yet is fine; box creates it with mode 0700.
+func CheckConfigDir(d Dirs) error {
+	fi, err := os.Lstat(d.Config)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a folder", d.Config)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%s must be private to you (chmod 700 %s)", d.Config, d.Config)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("%s is not owned by you", d.Config)
+	}
+	return nil
 }

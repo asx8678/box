@@ -9,18 +9,17 @@ box kiro-cli
 
 The first time, a one-screen editor (mouse or keyboard) asks what the program may use and saves the answers as a profile. After that, `box kiro-cli` starts straight away. box then replaces itself with `bwrap`, so nothing of box keeps running and the program gets the terminal directly.
 
-> **Status:** milestones 1–5, and the code part of milestone 6, of [the implementation plan](docs/implementation-plan.md) are written. The unit tests ran for milestones 1–2 on macOS; the end-to-end tests with real bubblewrap haven't run yet, and milestones 3–5 are compiled but untested. Run `make test-linux` on the WSL machine before relying on it.
+> **Status:** milestones 1–6 of [the implementation plan](docs/implementation-plan.md) are written, and the unit tests pass. The end-to-end tests with real bubblewrap (`make test-linux`, also run by CI) haven't run yet; open choices are in [docs/decisions.md](docs/decisions.md).
 
 ## Install
 
 ```
 sudo apt install bubblewrap
-make build-linux                         # bin/box-linux-amd64 and bin/box-linux-arm64
-install -m 755 bin/box-linux-amd64 ~/.local/bin/box
+make install                             # builds bin/box and installs it to ~/.local/bin/box
 box --doctor                             # checks bubblewrap and this machine
 ```
 
-On WSL no other setup is needed. On native Ubuntu 24.04 or later, `box --doctor` explains the AppArmor step if user namespaces are blocked.
+`make install PREFIX=/usr/local` installs elsewhere; `make build-linux` cross-compiles amd64 and arm64 binaries from any machine. On WSL no other setup is needed. On native Ubuntu 24.04 or later, `box --doctor` explains the AppArmor step if user namespaces are blocked.
 
 ## What the program can see
 
@@ -72,9 +71,10 @@ Any program starts from the same default: project read-write, network off, nothi
 ## Known limits
 
 - **Network on** means the whole network: the internet, your LAN, the Windows host on WSL and local services. Per-domain rules are planned for v2.
-- **Ctrl+C** can end the whole box, not just the program, when the program isn't a full-screen app: bwrap passes the signal on and then stops the sandbox. Full-screen programs and shells aren't affected.
+- **Ctrl+C** can end the whole box, not just the program, when the program isn't a full-screen app: bwrap passes the signal on and then stops the sandbox. Full-screen programs and shells aren't affected. `init = true` under `[sandbox]` in a profile runs the program under box's own small init, which gives it the terminal so Ctrl+C reaches only the program (Ctrl+Z is then ignored).
 - **No GPU** inside the box on WSL.
-- **Older kernels** that allow terminal injection (before Linux 6.2, such as Debian 12) make box detach the program from the terminal, so resizing and job control don't work there.
+- **Terminal injection** is blocked by current kernels, including WSL's. On kernels that still allow it (before Linux 6.2, such as Debian 12) box blocks it with a seccomp filter. On WSL the same filter blocks the VM's sockets to the Windows host (`AF_VSOCK`).
+- **Abstract Unix sockets** (an X11 server's, for example) are reachable with network on. On Linux 6.12 or later, `landlock = true` under `[sandbox]` blocks them.
 
 ## Development
 

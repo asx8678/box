@@ -51,6 +51,17 @@ func TestLookup(t *testing.T) {
 		})
 	}
 
+	appImage := "\x7fELF\x02\x01\x01\x00AI\x02\x00\x00\x00\x00\x00"
+	f.File("/home/u/Apps/tool.AppImage", appImage, 0o755)
+	f.File("/usr/bin/snap", "\x7fELF", 0o755).Symlink("/snap/bin/lxd", "/usr/bin/snap")
+	if p, err := Lookup(f, "/home/u/Apps/tool.AppImage", "/home/u/code/proj"); err != nil ||
+		!slices.Equal(p.Env, []string{"APPIMAGE_EXTRACT_AND_RUN=1"}) {
+		t.Errorf("AppImage: %+v, %v", p, err)
+	}
+	if p, _ := Lookup(f, "kiro-cli", "/home/u/code/proj"); len(p.Env) != 0 {
+		t.Errorf("a plain ELF binary got env %v", p.Env)
+	}
+
 	fails := []struct {
 		name string
 		code int
@@ -61,6 +72,7 @@ func TestLookup(t *testing.T) {
 		{"/mnt/c/Windows/System32/cmd.exe", ExitCannotRun},
 		{"./setup.exe", ExitCannotRun},
 		{"./.hidden", ExitCannotRun},
+		{"/snap/bin/lxd", ExitCannotRun},
 	}
 	for _, tt := range fails {
 		t.Run(tt.name, func(t *testing.T) {

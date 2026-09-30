@@ -63,6 +63,13 @@ type System struct {
 // Sandbox holds advanced switches that the TUI doesn't show.
 type Sandbox struct {
 	Strict bool `toml:"strict"` // adds --disable-userns: no nested sandboxes
+	// Init runs the program under a small init from box inside the
+	// sandbox, which gives it the terminal's foreground so Ctrl+C reaches
+	// only the program, not the whole box (plan B3; decided in the M0 spike).
+	Init bool `toml:"init"`
+	// Landlock blocks abstract Unix sockets outside the box when network
+	// is on (plan S3; needs Linux 6.12+, decided in the M0 spike).
+	Landlock bool `toml:"landlock"`
 }
 
 // Default is the generic starting point for any program: the project folder

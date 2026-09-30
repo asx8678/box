@@ -10,6 +10,7 @@ env -i \
   TMPDIR=/tmp \
 /usr/bin/bwrap \
   --unshare-all --share-net --die-with-parent \
+  --seccomp 4 \
   --ro-bind /usr /usr \
   --symlink usr/bin /bin \
   --symlink usr/sbin /sbin \
@@ -42,8 +43,8 @@ env -i \
   --ro-bind-data 3 /run/box/profile \
   --bind /home/u/.kiro /home/u/.kiro \
   --bind /home/u/workplace/kirocrew-workspace /home/u/workplace/kirocrew-workspace \
-  --ro-bind /home/u/.local/bin /home/u/.local/bin \
   --bind /home/u/code/proj /home/u/code/proj \
+  --ro-bind /home/u/.local/bin /home/u/.local/bin \
   --bind /home/u/.local/share/kiro-cli /home/u/.local/share/kiro-cli \
   --ro-bind /home/u/code/proj/.git/config /home/u/code/proj/.git/config \
   --ro-bind /home/u/code/proj/.git/hooks /home/u/code/proj/.git/hooks \
@@ -53,3 +54,5 @@ env -i \
 profile=default
 network=true
 workdir=/home/u/code/proj'
+# fd 4: box's seccomp filter, blocking VM sockets to the Windows host (AF_VSOCK); box passes it at run time,
+# so pasting this command needs that fd or the --seccomp line removed.

@@ -8,13 +8,18 @@ This plan checks the scope of the architecture plan, corrects the parts that don
 
 ## Status (Sep 30, 2026)
 
-- **Written:** M1–M5, and the code part of M6. M1 and M2 were unit-tested on macOS; M3 to M6 were compiled and vetted only. The end-to-end suite (`make test-linux`) has not run on Linux yet.
-- **M6 without real runs:** the changes came from the verified facts in section 2, not from running programs:
-  - a generic `tools` list mounts the install folders of the commands a program runs;
-  - program folders are always read-only outside the project (this fixed Kiro Crew's venv being writable under a read-write `~/.kiro`);
-  - AppImages get `APPIMAGE_EXTRACT_AND_RUN=1`, and snaps are refused (126);
-  - the kiro-cli and kirocrew presets use `tools`.
-- **Still open:** the M0 spikes on WSL (terminal and Ctrl+C, interop, `AF_VSOCK`, Landlock), which decide the B3 init and S3, and the real-program runs in M6.
+- **Written:** M1–M5, and the code part of M6. The follow-up pass (after M6) also added:
+  - `--dry-run` works where sandboxes can't run;
+  - `~/.config/box` must be private (0700);
+  - `make install`;
+  - a seccomp filter (TIOCSTI on older kernels instead of `--new-session`; `AF_VSOCK` on WSL);
+  - `sandbox.init` for Ctrl+C (B3) and `sandbox.landlock` for abstract sockets (S3), both off until the M0 checks decide;
+  - flushing terminal input after the TUI;
+  - GitHub Actions CI;
+  - `docs/decisions.md`.
+- **Tested:** all unit tests pass on macOS, including the TUI model tests and the seccomp program checked by an interpreter.
+- **Not run yet:** the Linux end-to-end suite, including the new pty tests that codify the M0 checks (`TestCtrlC`, `TestLandlock`, `TestVsock`, resize, TIOCSTI, job control). It runs with `make test-linux` on WSL, or in CI.
+- **Still open:** the decisions in `docs/decisions.md`, the real-program runs in M6, and v2 (per-domain network, per-folder homes).
 
 ## 1. Scope verdict
 

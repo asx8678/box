@@ -10,9 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -129,26 +131,90 @@ func RunProbe(stateDir string, fresh bool) (Probe, error) {
 	return p, nil
 }
 
+// memfd returns an inheritable in-memory file holding data, at offset 0.
+func memfd(name string, data []byte) (int, error) {
+	fd, err := unix.MemfdCreate(name, 0) // no MFD_CLOEXEC: bwrap reads it
+	if err != nil {
+		return -1, fmt.Errorf("memfd: %w", err)
+	}
+	if _, err := unix.Write(fd, data); err != nil {
+		unix.Close(fd)
+		return -1, fmt.Errorf("memfd: %w", err)
+	}
+	if _, err := unix.Seek(fd, 0, 0); err != nil {
+		unix.Close(fd)
+		return -1, fmt.Errorf("memfd: %w", err)
+	}
+	return fd, nil
+}
+
 // Exec replaces box with bwrap. It only returns on failure, and then
 // nothing has run: box never falls back to running unsandboxed.
 func Exec(bwrap string, plan *Plan) error {
-	fd, err := unix.MemfdCreate("box-profile", 0) // no MFD_CLOEXEC: bwrap reads it
+	fd, err := memfd("box-profile", plan.Info)
 	if err != nil {
-		return fmt.Errorf("memfd: %w", err)
-	}
-	if _, err := unix.Write(fd, plan.Info); err != nil {
-		return fmt.Errorf("memfd: %w", err)
-	}
-	if _, err := unix.Seek(fd, 0, 0); err != nil {
-		return fmt.Errorf("memfd: %w", err)
+		return err
 	}
 	plan.InfoFD = fd
+	if plan.Filter.Any() {
+		prog, err := SeccompProgram(runtime.GOARCH, plan.Filter)
+		if err != nil {
+			return err
+		}
+		if plan.SeccompFD, err = memfd("box-seccomp", prog); err != nil {
+			return err
+		}
+	}
 	// The TUI may leave the terminal non-blocking; programs expect blocking stdio.
 	for _, std := range []int{0, 1, 2} {
 		unix.SetNonblock(std, false)
 	}
+	if plan.FlushInput {
+		// Replies to the TUI's terminal queries may still be queued; the
+		// program would read them as typed input.
+		unix.IoctlSetInt(0, unix.TCFLSH, unix.TCIFLUSH)
+	}
+	// Landlock and no_new_privs apply to the calling thread, so the thread
+	// that sets them must be the one that calls execve.
+	runtime.LockOSThread()
+	if plan.Landlock {
+		if err := landlockScope(); err != nil {
+			return err
+		}
+	}
 	argv := append([]string{"bwrap"}, plan.Args()...)
 	err = syscall.Exec(bwrap, argv, plan.Env)
-	unix.Close(fd)
 	return fmt.Errorf("exec %s: %w", bwrap, err)
+}
+
+// LandlockABI returns the kernel's Landlock ABI version, or 0 without it.
+func LandlockABI() int {
+	v, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
+	if errno != 0 {
+		return 0
+	}
+	return int(v)
+}
+
+// landlockScope stops this thread, and everything it execs, from
+// connecting to abstract Unix sockets created outside it (such as an X11
+// server's). It has no filesystem rules, so bwrap can still mount.
+func landlockScope() error {
+	if abi := LandlockABI(); abi < 6 {
+		return fmt.Errorf("sandbox.landlock needs Landlock ABI 6 (Linux 6.12+); this kernel has %d", abi)
+	}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return fmt.Errorf("no_new_privs: %w", err)
+	}
+	attr := unix.LandlockRulesetAttr{Scoped: unix.LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET}
+	fd, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET,
+		uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
+	if errno != 0 {
+		return fmt.Errorf("landlock_create_ruleset: %w", errno)
+	}
+	defer unix.Close(int(fd))
+	if _, _, errno := unix.Syscall(unix.SYS_LANDLOCK_RESTRICT_SELF, fd, 0, 0); errno != 0 {
+		return fmt.Errorf("landlock_restrict_self: %w", errno)
+	}
+	return nil
 }

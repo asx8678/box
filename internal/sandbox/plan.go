@@ -54,9 +54,20 @@ type Input struct {
 	Network     *bool    // --net / --no-net override for this run
 	// LegacyTIOCSTI is /proc/sys/dev/tty/legacy_tiocsti: "0" means the
 	// kernel already blocks terminal injection; "1" or "" (unknown) means
-	// box falls back to --new-session.
+	// the seccomp filter blocks it.
 	LegacyTIOCSTI string
+	// Arch is the GOARCH the seccomp filter is built for.
+	Arch string
+	// Self is box's own executable, mounted at /run/box/box when the
+	// profile runs the program under box's init.
+	Self string
 }
+
+// InitPath is where box's own binary appears inside the sandbox.
+const InitPath = "/run/box/box"
+
+// DryRunSeccompFD is the fd the dry run shows for the seccomp filter.
+const DryRunSeccompFD = 4
 
 // Plan is a finished sandbox: bwrap's arguments plus the environment
 // passed to it.
@@ -71,8 +82,17 @@ type Plan struct {
 	// Create lists the program's own folders (and the private home) that
 	// don't exist yet; they are created with mode 0700 before exec.
 	Create []string
-	// NewSession is set when box had to fall back to --new-session.
+	// Filter is the seccomp filter passed to bwrap, if Filter.Any().
+	Filter    Filter
+	SeccompFD int // the fd carrying the filter; exec sets the real one
+	// NewSession is set when box had to fall back to --new-session
+	// because it can't build a seccomp filter for this machine.
 	NewSession bool
+	// Landlock asks exec to block abstract Unix sockets outside the box.
+	Landlock bool
+	// FlushInput asks exec to discard pending terminal input, such as
+	// replies to the TUI's capability queries.
+	FlushInput bool
 }
 
 // usrMerged are top-level folders that are symlinks into /usr on most
@@ -245,6 +265,20 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		seen[m.Dest] = true
 	}
 
+	if p.Sandbox.Init {
+		if in.Self == "" {
+			return nil, errors.New("sandbox.init needs box's own path")
+		}
+		self, err := profile.Canonical(h, in.Self)
+		if err != nil {
+			return nil, err
+		}
+		b.add(ROBind, self, InitPath)
+		sort.SliceStable(b.mounts, func(i, j int) bool {
+			return depth(b.mounts[i].Dest) < depth(b.mounts[j].Dest)
+		})
+	}
+
 	network := p.Network
 	if in.Network != nil {
 		network = *in.Network
@@ -256,15 +290,28 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		InfoFD:  DryRunInfoFD,
 		Create:  b.create,
 	}
+	if p.Sandbox.Init {
+		plan.Command = append([]string{InitPath, "--box-init", "--", in.Program}, in.Args...)
+	}
 	plan.Flags = []string{"--unshare-all"}
 	if network {
 		plan.Flags = append(plan.Flags, "--share-net")
 	}
 	plan.Flags = append(plan.Flags, "--die-with-parent")
-	if in.LegacyTIOCSTI != "0" {
-		plan.Flags = append(plan.Flags, "--new-session")
-		plan.NewSession = true
+	// Terminal injection: blocked by the kernel, or else by the filter,
+	// or as a last resort by detaching from the terminal. On WSL the
+	// filter also closes the VM's sockets to the Windows host.
+	filter := Filter{TIOCSTI: in.LegacyTIOCSTI != "0", Vsock: in.Protected.WSL}
+	if filter.Any() {
+		if SeccompSupported(in.Arch) {
+			plan.Filter = filter
+			plan.SeccompFD = DryRunSeccompFD
+		} else if filter.TIOCSTI {
+			plan.Flags = append(plan.Flags, "--new-session")
+			plan.NewSession = true
+		}
 	}
+	plan.Landlock = p.Sandbox.Landlock && network
 	if p.Sandbox.Strict {
 		plan.Flags = append(plan.Flags, "--disable-userns")
 	}

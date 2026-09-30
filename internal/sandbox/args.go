@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -8,6 +9,9 @@ import (
 // Args is bwrap's argument list, without argv[0].
 func (p *Plan) Args() []string {
 	args := append([]string(nil), p.Flags...)
+	if p.Filter.Any() {
+		args = append(args, "--seccomp", strconv.Itoa(p.SeccompFD))
+	}
 	for _, m := range p.Mounts {
 		args = append(args, m.args(p.InfoFD)...)
 	}
@@ -59,6 +63,9 @@ func (p *Plan) DryRun(bwrap string) string {
 		}
 	}
 	line(p.Flags...)
+	if p.Filter.Any() {
+		line("--seccomp", strconv.Itoa(DryRunSeccompFD))
+	}
 	for _, m := range p.Mounts {
 		line(m.args(DryRunInfoFD)...)
 	}
@@ -67,6 +74,21 @@ func (p *Plan) DryRun(bwrap string) string {
 	b.WriteString(" \\\n  " + strconv.Itoa(DryRunInfoFD) + "<<<")
 	b.WriteString(Quote(strings.TrimSuffix(string(p.Info), "\n")))
 	b.WriteByte('\n')
+	if p.Filter.Any() {
+		var blocks []string
+		if p.Filter.TIOCSTI {
+			blocks = append(blocks, "terminal injection (TIOCSTI, TIOCLINUX)")
+		}
+		if p.Filter.Vsock {
+			blocks = append(blocks, "VM sockets to the Windows host (AF_VSOCK)")
+		}
+		fmt.Fprintf(&b, "# fd %d: box's seccomp filter, blocking %s; box passes it at run time,\n"+
+			"# so pasting this command needs that fd or the --seccomp line removed.\n",
+			DryRunSeccompFD, strings.Join(blocks, " and "))
+	}
+	if p.Landlock {
+		b.WriteString("# box also applies a Landlock scope blocking abstract Unix sockets outside the box.\n")
+	}
 	return b.String()
 }
 
