@@ -1,0 +1,10 @@
+# Kiro Crew: writes ~/.kiro/agents and ~/.kiro/settings/mcp.json, so ~/.kiro
+# must be read-write; it runs kiro-cli from ~/.local/bin and uses its login.
+network = true
+
+[home]
+rw = ["~/.kiro", "~/.local/share/kiro-cli", "~/workplace/kirocrew-workspace"]
+ro = ["~/.local/bin"]
+
+[env]
+pass = ["KIRO_API_KEY", "AWS_PROFILE"]

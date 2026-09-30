@@ -1,0 +1,2 @@
+# A shell: nothing extra, network off.
+network = false

@@ -1,0 +1,55 @@
+env -i \
+  BOX_PROFILE=kirocrew/default \
+  HOME=/home/u \
+  KIRO_API_KEY=k-123 \
+  LANG=C.UTF-8 \
+  LC_TIME=en_GB.UTF-8 \
+  PATH=/home/u/.local/bin:/usr/local/bin:/usr/bin:/bin \
+  PWD=/home/u/code/proj \
+  TERM=xterm-256color \
+  TMPDIR=/tmp \
+/usr/bin/bwrap \
+  --unshare-all --share-net --die-with-parent \
+  --ro-bind /usr /usr \
+  --symlink usr/bin /bin \
+  --symlink usr/sbin /sbin \
+  --symlink usr/lib /lib \
+  --symlink usr/lib64 /lib64 \
+  --proc /proc \
+  --dev /dev \
+  --tmpfs /tmp \
+  --tmpfs /run \
+  --ro-bind-try /etc/alternatives /etc/alternatives \
+  --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
+  --ro-bind-try /etc/crypto-policies /etc/crypto-policies \
+  --ro-bind-try /etc/gai.conf /etc/gai.conf \
+  --ro-bind-try /etc/group /etc/group \
+  --ro-bind-try /etc/host.conf /etc/host.conf \
+  --ro-bind-try /etc/hosts /etc/hosts \
+  --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache \
+  --ro-bind-try /etc/ld.so.conf /etc/ld.so.conf \
+  --ro-bind-try /etc/ld.so.conf.d /etc/ld.so.conf.d \
+  --ro-bind-try /etc/localtime /etc/localtime \
+  --ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf \
+  --ro-bind-try /etc/os-release /etc/os-release \
+  --ro-bind-try /etc/passwd /etc/passwd \
+  --ro-bind-try /etc/pki /etc/pki \
+  --ro-bind-try /etc/resolv.conf /etc/resolv.conf \
+  --ro-bind-try /etc/ssl /etc/ssl \
+  --ro-bind-try /etc/terminfo /etc/terminfo \
+  --ro-bind-try /etc/timezone /etc/timezone \
+  --bind /home/u/.local/share/box/homes/kirocrew/default /home/u \
+  --ro-bind-data 3 /run/box/profile \
+  --bind /home/u/.kiro /home/u/.kiro \
+  --bind /home/u/workplace/kirocrew-workspace /home/u/workplace/kirocrew-workspace \
+  --ro-bind /home/u/.local/bin /home/u/.local/bin \
+  --bind /home/u/code/proj /home/u/code/proj \
+  --bind /home/u/.local/share/kiro-cli /home/u/.local/share/kiro-cli \
+  --ro-bind /home/u/code/proj/.git/config /home/u/code/proj/.git/config \
+  --ro-bind /home/u/code/proj/.git/hooks /home/u/code/proj/.git/hooks \
+  --chdir /home/u/code/proj \
+  -- /home/u/.local/bin/kiro-cli chat 'it'\''s a test' \
+  3<<<'program=kirocrew
+profile=default
+network=true
+workdir=/home/u/code/proj'

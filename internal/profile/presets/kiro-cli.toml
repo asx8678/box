@@ -1,0 +1,10 @@
+# Kiro CLI: login state read-write; global config read-only, so a boxed agent
+# can't add MCP servers or hooks that run outside the box (plan decision D3).
+network = true
+
+[home]
+rw = ["~/.local/share/kiro-cli"]
+ro = ["~/.kiro"]
+
+[env]
+pass = ["KIRO_API_KEY", "AWS_PROFILE"]
