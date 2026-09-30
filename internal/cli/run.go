@@ -14,6 +14,7 @@ import (
 	"github.com/asx8678/box/internal/host"
 	"github.com/asx8678/box/internal/profile"
 	"github.com/asx8678/box/internal/sandbox"
+	"github.com/asx8678/box/internal/tui"
 )
 
 // ExitBox is box's own failure before anything runs, as with docker run.
@@ -29,7 +30,8 @@ box's flags go before the program name; everything after it goes to the
 program untouched.
 
   -p NAME      run with profile NAME
-  -n NAME      create profile NAME from the preset, then run (needs --no-tui for now)
+  -n NAME      create profile NAME in the editor, then run (--no-tui: save the preset as-is)
+  -e           edit the profile that would be used, then run
   --net        network on for this run only
   --no-net     network off for this run only
   --dry-run    print the bwrap command instead of running it
@@ -49,6 +51,7 @@ type options struct {
 	dryRun, noTUI, doctor bool
 	version, help         bool
 	list, reset, yes      bool
+	edit                  bool
 }
 
 func parse(args []string, stderr io.Writer) (options, []string, error) {
@@ -69,14 +72,12 @@ func parse(args []string, stderr io.Writer) (options, []string, error) {
 	fs.BoolVar(&o.list, "list", false, "")
 	fs.BoolVar(&o.reset, "r", false, "")
 	fs.BoolVar(&o.yes, "y", false, "")
-	for _, later := range []string{"e"} {
-		fs.Bool(later, false, "")
-	}
+	fs.BoolVar(&o.edit, "e", false, "")
 	if err := fs.Parse(args); err != nil {
 		return o, nil, err
 	}
-	if fs.Lookup("e").Value.String() == "true" {
-		return o, nil, errors.New("-e arrives with the TUI (milestone 4)")
+	if o.edit && (o.newProfile != "" || o.noTUI) {
+		return o, nil, errors.New("-e can't be combined with -n or --no-tui")
 	}
 	if o.yes && !o.reset {
 		return o, nil, errors.New("-y only goes with -r")
@@ -163,46 +164,89 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	if err != nil {
 		return ExitBox, err
 	}
-	name, p, err := choose(dirs, folders, o, prog.Name, realWd)
+	self, _ := os.Executable()
+	prot, err := profile.NewProtected(h, dirs, self, probe.WSL)
 	if err != nil {
 		return ExitBox, err
 	}
-	if o.newProfile != "" {
+	var network *bool
+	if o.net || o.noNet {
+		network = &o.net
+	}
+	bwrap := probe.Bwrap
+	if bwrap == "" {
+		bwrap = "bwrap"
+	}
+	build := func(p profile.Profile, name string) (*sandbox.Plan, error) {
+		return sandbox.Build(h, sandbox.Input{
+			Profile:       p,
+			ProfileName:   name,
+			Dirs:          dirs,
+			Protected:     prot,
+			Workdir:       realWd,
+			Program:       prog.Path,
+			ProgramDirs:   prog.Dirs,
+			Args:          args,
+			Network:       network,
+			LegacyTIOCSTI: probe.LegacyTIOCSTI,
+		})
+	}
+
+	sel, err := choose(dirs, folders, o, prog.Name, realWd)
+	if err != nil {
+		return ExitBox, err
+	}
+	name, p := sel.name, sel.profile
+	if o.newProfile != "" && o.noTUI {
 		if s := profile.Suggest(h, dirs.Home, p); len(s) > 0 {
 			fmt.Fprintf(os.Stderr, "box: folders named after %s that the profile doesn't mount: %s\n"+
 				"     add them under [home] in %s if it needs them\n",
 				prog.Name, strings.Join(s, ", "), profile.Path(dirs, prog.Name, name))
 		}
 	}
+	if sel.edit {
+		res, err := tui.Edit(tui.Options{
+			Profile:   p,
+			Name:      name,
+			New:       sel.isNew,
+			Workdir:   tilde(realWd, dirs.Home),
+			Home:      dirs.Home,
+			Suggested: profile.Suggest(h, dirs.Home, p),
+			EnvHints:  envHints(h),
+			Exists: func(n string) bool {
+				_, err := os.Lstat(profile.Path(dirs, prog.Name, n))
+				return err == nil
+			},
+			CheckPath: func(path string, rw bool) error {
+				return checkPath(h, dirs.Home, prot, path, rw)
+			},
+			Plan: func(p profile.Profile, n string) (string, error) {
+				plan, err := build(p, n)
+				if err != nil {
+					return "", err
+				}
+				return plan.DryRun(bwrap), nil
+			},
+		})
+		if errors.Is(err, tui.ErrCancelled) {
+			return ExitBox, errors.New("cancelled; nothing was saved or run")
+		}
+		if err != nil {
+			return ExitBox, err
+		}
+		name, p = res.Name, res.Profile
+		if !o.dryRun {
+			if err := profile.Save(profile.Path(dirs, prog.Name, name), p); err != nil {
+				return ExitBox, err
+			}
+		}
+	}
 
-	self, _ := os.Executable()
-	prot, err := profile.NewProtected(h, dirs, self, probe.WSL)
-	if err != nil {
-		return ExitBox, err
-	}
-	in := sandbox.Input{
-		Profile:       p,
-		ProfileName:   name,
-		Dirs:          dirs,
-		Protected:     prot,
-		Workdir:       realWd,
-		Program:       prog.Path,
-		ProgramDirs:   prog.Dirs,
-		Args:          args,
-		LegacyTIOCSTI: probe.LegacyTIOCSTI,
-	}
-	if o.net || o.noNet {
-		in.Network = &o.net
-	}
-	plan, err := sandbox.Build(h, in)
+	plan, err := build(p, name)
 	if err != nil {
 		return ExitBox, err
 	}
 	if o.dryRun {
-		bwrap := probe.Bwrap
-		if bwrap == "" {
-			bwrap = "bwrap"
-		}
 		fmt.Fprint(stdout, plan.DryRun(bwrap))
 		return 0, nil
 	}
@@ -220,35 +264,58 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	return ExitBox, sandbox.Exec(probe.Bwrap, plan)
 }
 
+// selection is the profile to run and whether the editor opens first.
+type selection struct {
+	name    string
+	profile profile.Profile
+	edit    bool // open the editor before running
+	isNew   bool // the editor is creating this profile
+}
+
 // choose picks the profile: -n creates it, -p names it, then folder
-// memory, then the program's only profile. Choosing among several, or
-// creating the first one interactively, needs the TUI (milestone 4).
-func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd string) (string, profile.Profile, error) {
+// memory, then the program's only profile. With no profile yet, the editor
+// opens on the preset. Choosing among several needs the picker (milestone 5).
+func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd string) (selection, error) {
+	canEdit := !o.noTUI && interactive()
+	noEditor := func(what string) error {
+		why := "there's no terminal to show the editor on"
+		if o.noTUI {
+			why = "--no-tui is set"
+		}
+		return fmt.Errorf("%s needs the profile editor, but %s", what, why)
+	}
 	if o.newProfile != "" {
 		if !profile.ValidName(o.newProfile) {
-			return "", profile.Profile{}, fmt.Errorf("profile name %q is not valid", o.newProfile)
-		}
-		if !o.noTUI {
-			return "", profile.Profile{}, errors.New("the profile editor arrives with the TUI; use -n NAME --no-tui to save the preset as-is")
+			return selection{}, fmt.Errorf("profile name %q is not valid", o.newProfile)
 		}
 		path := profile.Path(dirs, program, o.newProfile)
 		if _, err := os.Lstat(path); err == nil {
-			return "", profile.Profile{}, fmt.Errorf("profile %q already exists for %s", o.newProfile, program)
+			return selection{}, fmt.Errorf("profile %q already exists for %s", o.newProfile, program)
 		}
 		p, err := profile.Preset(program)
 		if err != nil {
-			return "", profile.Profile{}, err
+			return selection{}, err
 		}
-		if !o.dryRun {
-			if err := profile.Save(path, p); err != nil {
-				return "", profile.Profile{}, err
+		if o.noTUI {
+			if !o.dryRun {
+				if err := profile.Save(path, p); err != nil {
+					return selection{}, err
+				}
 			}
+			return selection{name: o.newProfile, profile: p}, nil
 		}
-		return o.newProfile, p, nil
+		if !canEdit {
+			return selection{}, noEditor("-n")
+		}
+		// Pre-fill from the program's default profile when there is one.
+		if d, err := profile.Load(profile.Path(dirs, program, "default"), program); err == nil {
+			p = d
+		}
+		return selection{name: o.newProfile, profile: p, edit: true, isNew: true}, nil
 	}
 	names, err := profile.List(dirs, program)
 	if err != nil {
-		return "", profile.Profile{}, err
+		return selection{}, err
 	}
 	name := o.profile
 	if name == "" {
@@ -259,22 +326,81 @@ func choose(dirs profile.Dirs, folders *profile.Folders, o options, program, wd 
 	if name == "" {
 		switch len(names) {
 		case 0:
-			why := "the profile editor arrives with the TUI (milestone 4)"
-			if o.noTUI || !interactive() {
-				why = "there's no terminal to ask on"
+			if !canEdit {
+				return selection{}, fmt.Errorf("%s has no profile yet, and %s; create one from its preset with:\n  box -n default --no-tui %s",
+					program, strings.TrimPrefix(noEditor("").Error(), " needs the profile editor, but "), program)
 			}
-			return "", profile.Profile{}, fmt.Errorf("%s has no profile yet, and %s; create one from its preset with:\n  box -n default --no-tui %s", program, why, program)
+			p, err := profile.Preset(program)
+			if err != nil {
+				return selection{}, err
+			}
+			return selection{name: "default", profile: p, edit: true, isNew: true}, nil
 		case 1:
 			name = names[0]
 		default:
-			return "", profile.Profile{}, fmt.Errorf("%s has several profiles (%s); pick one with -p NAME", program, strings.Join(names, ", "))
+			return selection{}, fmt.Errorf("%s has several profiles (%s); pick one with -p NAME", program, strings.Join(names, ", "))
 		}
 	}
 	if !slices.Contains(names, name) {
-		return "", profile.Profile{}, fmt.Errorf("%s has no profile %q", program, name)
+		return selection{}, fmt.Errorf("%s has no profile %q", program, name)
 	}
 	p, err := profile.Load(profile.Path(dirs, program, name), program)
-	return name, p, err
+	if err != nil {
+		return selection{}, err
+	}
+	if o.edit && !canEdit {
+		return selection{}, noEditor("-e")
+	}
+	return selection{name: name, profile: p, edit: o.edit}, nil
+}
+
+// checkPath is the editor's live check for a folder being added or
+// switched to read-write: it must exist and pass the safety rules.
+func checkPath(h host.Host, home string, prot profile.Protected, raw string, rw bool) error {
+	expanded, err := profile.Expand(raw, home)
+	if err != nil {
+		return err
+	}
+	c, err := profile.Canonical(h, expanded)
+	if err != nil {
+		return err
+	}
+	if c == home {
+		return errors.New("that's your whole home folder; pick the folders inside it the program needs")
+	}
+	if _, err := h.Stat(c); err != nil {
+		return fmt.Errorf("%s doesn't exist", raw)
+	}
+	if err := prot.CheckMount(h, c); err != nil {
+		return err
+	}
+	if rw {
+		return prot.CheckRW(c)
+	}
+	return nil
+}
+
+// envHints offers variables set on the host that programs commonly need.
+// They start unticked; their values are read at run time, never stored.
+func envHints(h host.Host) []string {
+	var out []string
+	for _, kv := range h.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasSuffix(k, "_API_KEY") || strings.HasSuffix(k, "_TOKEN") ||
+			k == "AWS_PROFILE" || k == "AWS_REGION" || k == "EDITOR" {
+			out = append(out, k)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// tilde shortens paths under home to "~/…" for display.
+func tilde(path, home string) string {
+	if profile.Within(path, home) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
 }
 
 func doctor(dirs profile.Dirs, stdout, stderr io.Writer) int {

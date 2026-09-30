@@ -26,7 +26,7 @@ func TestParse(t *testing.T) {
 		{"--net", "--no-net", "x"},
 		{"-p", "a", "-n", "b", "x"},
 		{"--bogus", "x"},
-		{"-e", "x"},
+		{"-e", "--no-tui", "x"},
 		{"-y", "x"},
 		{"-r", "-p", "a", "x"},
 	} {
