@@ -341,7 +341,7 @@ func TestInheritedFilesDontLeak(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer marker.Close()
-	cmd := exec.Command(boxBin, "--no-tui", "sh", "-c", `for f in /proc/self/fd/*; do readlink "$f"; done`)
+	cmd := exec.Command(boxBin, "--no-tui", "sh", "-c", `for f in /proc/self/fd/*; do readlink "$f" || true; done`)
 	cmd.Dir = e.proj
 	cmd.Env = []string{"HOME=" + e.home, "PATH=/usr/local/bin:/usr/bin:/bin"}
 	cmd.ExtraFiles = []*os.File{marker} // fd 3 in box
