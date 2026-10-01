@@ -126,3 +126,16 @@ func CheckConfigDir(d Dirs) error {
 	}
 	return checkPrivate(d.Config, fi, 0o077, "must be private to you (chmod 700 "+d.Config+")")
 }
+
+// CheckPrivateDir refuses a folder that isn't a real folder (not a
+// symlink), owned by the user and closed to everyone else.
+func CheckPrivateDir(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a folder", path)
+	}
+	return checkPrivate(path, fi, 0o077, "must be private to you (chmod 700 "+path+")")
+}

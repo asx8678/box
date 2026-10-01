@@ -28,6 +28,7 @@ type Options struct {
 	Home      string   // for displaying and completing "~/" paths
 	Suggested []string // program folders to offer, unticked ("~/…")
 	EnvHints  []string // variable names to offer, unticked
+	Blocked   []string // hosts a restricted network blocked lately, to allow with a click
 	// Exists reports whether a profile with this name is already saved.
 	Exists func(name string) bool
 	// CheckPath checks a folder about to be ticked or added: the safety
@@ -90,6 +91,7 @@ type editor struct {
 	groups   []groupItem // for a restricted network
 	hosts    []string    // custom allowed hosts and IP addresses
 	own      []string    // the program's own servers: always allowed
+	blocked  []string    // lately blocked hosts not yet allowed
 	focus    string
 
 	name      textinput.Model
@@ -140,6 +142,7 @@ func newEditor(opts Options) *editor {
 	}
 	e.hosts = slices.Clone(opts.Profile.Allow.Hosts)
 	e.own = profile.OwnHosts(opts.Profile.Program)
+	e.blocked = slices.Clone(opts.Blocked)
 	e.name = textinput.New()
 	e.name.Prompt = ""
 	e.name.CharLimit = 64
@@ -281,6 +284,16 @@ func (e *editor) activate(id string) tea.Cmd {
 		if i < len(e.hosts) {
 			e.setNote(false, "Removed %s", e.hosts[i])
 			e.hosts = slices.Delete(e.hosts, i, i+1)
+			e.focus = "add:host"
+		}
+	case "b":
+		if i < len(e.blocked) {
+			host := e.blocked[i]
+			if !slices.Contains(e.hosts, host) {
+				e.hosts = append(e.hosts, host)
+			}
+			e.blocked = slices.Delete(e.blocked, i, i+1)
+			e.setNote(false, "Allowed %s, under Custom.", host)
 			e.focus = "add:host"
 		}
 	case "f":
@@ -740,9 +753,6 @@ func (e *editor) body(w int) (ls []line, first, last int) {
 	case profile.NetOn:
 		ls = append(ls, indent(wrap("⚠ reaches the internet, your LAN, the Windows host on WSL and local services",
 			styleWarn, inner), 4)...)
-	case profile.NetRestricted:
-		ls = append(ls, indent(wrap("⚠ not enforced yet: saved, but box won't run it until its proxy is built",
-			styleWarn, inner), 4)...)
 	}
 	blank()
 	if net == profile.NetRestricted {
@@ -858,7 +868,7 @@ func (e *editor) allowed(inner int) []line {
 			ls = append(ls, append(line{gutter(), styled(styleDim, pad(label, 17))}, l...))
 		}
 	}
-	for _, kind := range [][2]string{{"docs", "Documentation"}, {"service", "Services"}} {
+	for _, kind := range [][2]string{{"docs", "Documentation"}, {"packages", "Packages"}, {"service", "Services"}} {
 		var groups [][]seg
 		if kind[0] == "docs" {
 			groups = append(groups, append(e.checkbox("gall", e.allDocs(), "All"), txt("   ")))
@@ -875,6 +885,13 @@ func (e *editor) allowed(inner int) []line {
 		groups = append(groups, []seg{txt(h + " "), e.button(fmt.Sprintf("h:%d:rm", i), "✕", secondary), txt("   ")})
 	}
 	rows("Custom", append(groups, []seg{e.button("add:host", "+ Add custom", secondary)}))
+	if len(e.blocked) > 0 {
+		var blocked [][]seg
+		for i, h := range e.blocked {
+			blocked = append(blocked, []seg{e.button(fmt.Sprintf("b:%d", i), "+ "+h, secondary), txt("  ")})
+		}
+		rows("Blocked lately", blocked)
+	}
 	return ls
 }
 
@@ -966,6 +983,10 @@ func (e *editor) describe(id string) string {
 	case "h":
 		if i < len(e.hosts) {
 			return "Remove " + e.hosts[i] + " from the allowed network."
+		}
+	case "b":
+		if i < len(e.blocked) {
+			return prog + " tried to reach " + e.blocked[i] + " and box blocked it. Allow it from now on, under Custom."
 		}
 	case "f":
 		if i >= len(e.items) {

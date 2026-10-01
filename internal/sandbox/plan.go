@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/asx8678/box/internal/egress"
 	"github.com/asx8678/box/internal/host"
 	"github.com/asx8678/box/internal/profile"
 )
@@ -61,10 +62,17 @@ type Input struct {
 	// Self is box's own executable, mounted at /run/box/box when the
 	// profile runs the program under box's init.
 	Self string
+	// EgressSocket is the proxy's Unix socket on the host, for a restricted
+	// network; it need not exist yet.
+	EgressSocket string
 }
 
-// InitPath is where box's own binary appears inside the sandbox.
-const InitPath = "/run/box/box"
+// InitPath is where box's own binary appears inside the sandbox, and
+// EgressPath where the proxy socket does.
+const (
+	InitPath   = "/run/box/box"
+	EgressPath = "/run/box/egress.sock"
+)
 
 // DryRunSeccompFD is the fd the dry run shows for the seccomp filter.
 const DryRunSeccompFD = 4
@@ -200,10 +208,26 @@ func Build(h host.Host, in Input) (*Plan, error) {
 	if err := b.programDirs(in.ProgramDirs, wd, home); err != nil {
 		return nil, err
 	}
+	network := p.Network
+	if in.Network != nil { // --net or --no-net, for this run
+		network = profile.NetOff
+		if *in.Network {
+			network = profile.NetOn
+		}
+	}
+	// A restricted box reaches the network only through box's proxy socket;
+	// box's init runs the bridge to it, so it always runs under the init.
+	proxied := network == profile.NetRestricted
+	if proxied {
+		if in.EgressSocket == "" {
+			return nil, errors.New("a restricted network needs box's proxy socket")
+		}
+		b.add(ROBind, in.EgressSocket, EgressPath)
+	}
 	command := append([]string{in.Program}, in.Args...)
-	if p.Sandbox.Init {
+	if p.Sandbox.Init || proxied {
 		if in.Self == "" {
-			return nil, errors.New("sandbox.init needs box's own path")
+			return nil, errors.New("box's init needs box's own path")
 		}
 		self, err := profile.Canonical(h, in.Self)
 		if err != nil {
@@ -227,13 +251,6 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		seen[m.Dest] = true
 	}
 
-	network := p.Network
-	if in.Network != nil { // --net or --no-net, for this run
-		network = profile.NetOff
-		if *in.Network {
-			network = profile.NetOn
-		}
-	}
 	plan := &Plan{
 		Mounts:   b.mounts,
 		Chdir:    wd,
@@ -248,24 +265,26 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		plan.Allowed = p.Allowed()
 	}
 	plan.flags(in, network == profile.NetOn)
-	plan.Env, plan.Passed = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), in.ProgramEnv)
+	programEnv := in.ProgramEnv
+	if proxied {
+		programEnv = append(slices.Clone(programEnv), proxyEnv...)
+	}
+	plan.Env, plan.Passed = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), programEnv)
 	plan.Info = fmt.Appendf(nil, "program=%s\nprofile=%s\nnetwork=%s\nworkdir=%s\n",
 		p.Program, in.ProfileName, network, wd)
 	return plan, nil
 }
 
-// ErrNotEnforced is why a restricted plan can't run yet.
-var ErrNotEnforced = errors.New("the profile restricts the network to the hosts it allows, and box can't enforce that yet: " +
-	"its proxy isn't built, and box won't open the whole network in its place")
-
-// Runnable reports whether box can enforce everything the plan promises.
-// A restricted network needs box's proxy; until it exists the plan can be
-// previewed and saved, but not run.
-func (p *Plan) Runnable() error {
-	if p.Network == profile.NetRestricted {
-		return ErrNotEnforced
-	}
-	return nil
+// proxyEnv points programs at the bridge to box's proxy. socks5h sends host
+// names, so the box needs no DNS of its own. Node.js reads the variables
+// only with NODE_USE_ENV_PROXY. A profile can change any of them; that only
+// breaks its own network.
+var proxyEnv = []string{
+	"ALL_PROXY=socks5h://" + egress.SocksAddr, "all_proxy=socks5h://" + egress.SocksAddr,
+	"HTTP_PROXY=http://" + egress.HTTPAddr, "http_proxy=http://" + egress.HTTPAddr,
+	"HTTPS_PROXY=http://" + egress.HTTPAddr, "https_proxy=http://" + egress.HTTPAddr,
+	"NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1",
+	"NODE_USE_ENV_PROXY=1",
 }
 
 // flags sets bwrap's namespace and process options; shareNet gives the

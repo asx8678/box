@@ -61,10 +61,13 @@ func OwnHosts(program string) []string {
 	return hosts
 }
 
-// AllowSet is one named part of a restricted profile's allowlist.
+// AllowSet is one named part of a restricted profile's allowlist. Custom
+// is the profile's own hosts, which the user typed: they may lead into the
+// LAN, where box's lists may not.
 type AllowSet struct {
-	Name  string
-	Hosts []string
+	Name   string
+	Hosts  []string
+	Custom bool
 }
 
 // Allowed lists everything a restricted profile may reach: the program's
@@ -72,15 +75,15 @@ type AllowSet struct {
 func (p Profile) Allowed() []AllowSet {
 	var sets []AllowSet
 	if own := OwnHosts(p.Program); len(own) > 0 {
-		sets = append(sets, AllowSet{p.Program + "'s own servers", own})
+		sets = append(sets, AllowSet{Name: p.Program + "'s own servers", Hosts: own})
 	}
 	for _, g := range NetGroups() {
 		if slices.Contains(p.Allow.Groups, g.ID) {
-			sets = append(sets, AllowSet{g.ID, g.Hosts})
+			sets = append(sets, AllowSet{Name: g.ID, Hosts: g.Hosts})
 		}
 	}
 	if len(p.Allow.Hosts) > 0 {
-		sets = append(sets, AllowSet{"custom", p.Allow.Hosts})
+		sets = append(sets, AllowSet{Name: "custom", Hosts: p.Allow.Hosts, Custom: true})
 	}
 	return sets
 }

@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/asx8678/box/internal/egress"
 )
 
 // Init runs inside the sandbox as box's init (profile sandbox.init, plan
@@ -30,6 +32,14 @@ func Init(argv []string) int {
 	if _, err := os.Stat("/run/box/profile"); err != nil {
 		fmt.Fprintln(os.Stderr, "box: --box-init only runs inside a box")
 		return 125
+	}
+	// In a restricted box, the program's proxy settings point at loopback
+	// ports; the bridge carries them to box's proxy outside. Without it the
+	// program has no network, which is the safe way to fail.
+	if _, err := os.Stat(EgressPath); err == nil {
+		if err := egress.Bridge(EgressPath); err != nil {
+			fmt.Fprintf(os.Stderr, "box init: the network bridge didn't start (%v); the program has no network\n", err)
+		}
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

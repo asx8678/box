@@ -90,11 +90,11 @@
 75. Remove the no-op shell presets; offer proxy variables; edit set variables. S, later
 
 ## Network
-76. Build the proxy, so "restricted" is enforced. L, now
-77. Decide whether to hide "restricted" until then. S, now
-78. The proxy must refuse names that resolve to private addresses. With 76
-79. Blocked-hosts log with one-click allow. M, with 76
-80. Groups: package registries, GitHub, `cli.kiro.dev`, `*.api.aws`, sources for docs groups. S, now
+76. Build the proxy, so "restricted" is enforced. L, now **Done** (proxy branch).
+77. Decide whether to hide "restricted" until then. S, now **Settled by 76**: restricted runs now.
+78. The proxy must refuse names that resolve to private addresses. With 76 **Done** (proxy branch): custom hosts you type may.
+79. Blocked-hosts log with one-click allow. M, with 76 **Done** (proxy branch): `box --net-log`, a summary after each run, and Blocked lately in the editor.
+80. Groups: package registries, GitHub, `cli.kiro.dev`, `*.api.aws`, sources for docs groups. S, now **Done** (proxy branch): GitHub, npm, PyPI, crates.io, Go modules, Maven Central, cli.kiro.dev, *.api.aws. Hosts not re-checked online.
 81. Host check accepts hex forms and `*.co.uk`; the AWS group also matches any rented server. S, later
 82. Address ranges, UDP, git over SSH. M, later
 83. Show a group's full host list; keep the data fresh. S, later

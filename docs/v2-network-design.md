@@ -24,8 +24,13 @@ reaching a registry) works without opening the LAN.
 
 ## 2. Profile schema (implemented)
 
-The schema, the editor and the dry run are on main. The proxy (sections 3 to 5)
-is not, so box previews and saves a restricted profile but refuses to run it.
+Built (October 2026): the schema, the editor, the dry run, and the proxy of
+sections 3 to 5, in `internal/egress`. It differs from this sketch in places:
+one host-side listener tells SOCKS5 and HTTP apart by the first byte, so the
+in-box bridge only forwards bytes; plain http:// requests are proxied too;
+names are resolved on the host and the checked address dialled, and a name
+from box's lists may not resolve to a private address (custom hosts may);
+the log is `~/.local/state/box/net.log`, shown by `box --net-log`.
 
 ```toml
 network = "restricted"    # "off" | "restricted" | "on"

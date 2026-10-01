@@ -2,6 +2,9 @@ package sandbox
 
 import "errors"
 
+// ExitBox is box's own failure before anything runs, as with docker run.
+const ExitBox = 125
+
 // ErrNeedsLinux is returned where bubblewrap would be needed on another OS.
 var ErrNeedsLinux = errors.New("box needs Linux: bubblewrap only runs there (on Windows, use WSL2)")
 

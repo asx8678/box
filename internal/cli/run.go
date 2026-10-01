@@ -26,7 +26,7 @@ const ExitBox = 125
 const usage = `usage: box [flags] <program> [program args...]
        box -l | --list
        box -r [-y] <program>
-       box --doctor | --version | -h
+       box --doctor | --net-log | --version | -h
 
 Runs <program> inside a bubblewrap sandbox limited to the current folder.
 box's flags go before the program name; everything after it goes to the
@@ -43,6 +43,7 @@ program untouched.
   -r           reset: delete the program's profiles and folder memory
   -y           with -r: don't ask for confirmation (keeps the private home)
   --doctor     check bubblewrap and this machine, then exit
+  --net-log    show what restricted networks allowed and blocked lately
   --version    print box's version
 
 With no profile yet, an editor opens (mouse or keyboard); with several,
@@ -56,7 +57,7 @@ type options struct {
 	profile, newProfile   string
 	net, noNet            bool
 	dryRun, noTUI, doctor bool
-	version, help         bool
+	version, help, netLog bool
 	list, reset, yes      bool
 	edit                  bool
 }
@@ -73,6 +74,7 @@ func parse(args []string) (options, []string, error) {
 	fs.BoolVar(&o.noTUI, "no-tui", false, "")
 	fs.BoolVar(&o.doctor, "doctor", false, "")
 	fs.BoolVar(&o.version, "version", false, "")
+	fs.BoolVar(&o.netLog, "net-log", false, "")
 	fs.BoolVar(&o.help, "h", false, "")
 	fs.BoolVar(&o.help, "help", false, "")
 	fs.BoolVar(&o.list, "l", false, "")
@@ -134,6 +136,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return doctor(dirs, stdout, stderr)
 	case o.list:
 		return list(dirs, stdout, stderr)
+	case o.netLog:
+		return showNetLog(dirs, stdout)
 	case o.reset:
 		if len(rest) != 1 {
 			return fail(stderr, errors.New("usage: box -r [-y] <program>"))
@@ -163,10 +167,11 @@ type runner struct {
 	self    string
 	bwrap   string
 	network *bool
+	egress  string // the proxy socket, for a restricted network
 }
 
 func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, stdout, stderr io.Writer) (int, error) {
-	r := &runner{h: h, dirs: dirs, args: args}
+	r := &runner{h: h, dirs: dirs, args: args, egress: egressSocket(h)}
 	wd, err := h.Getwd()
 	if err != nil {
 		return ExitBox, err
@@ -250,9 +255,6 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 		fmt.Fprint(stdout, plan.DryRun(r.bwrap))
 		return 0, nil
 	}
-	if err := plan.Runnable(); err != nil {
-		return ExitBox, fmt.Errorf("%w\n     nothing ran; until then use --net (whole network) or --no-net (none) for one run, or -e to change the profile", err)
-	}
 	for _, n := range plan.Notes {
 		fmt.Fprintf(stderr, "box: note: %s\n", n)
 	}
@@ -276,6 +278,9 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 			step = tui.LaunchStep
 		}
 		tui.Launching(stderr, r.prog.Name, launchSummary(r.prog.Name, name, p, plan.Network), step)
+	}
+	if plan.Network == profile.NetRestricted {
+		return r.proxied(plan, name, stderr)
 	}
 	return ExitBox, sandbox.Exec(r.probe.Bwrap, plan)
 }
@@ -314,6 +319,7 @@ func (r *runner) plan(p profile.Profile, name string) (*sandbox.Plan, error) {
 		LegacyTIOCSTI: r.probe.LegacyTIOCSTI,
 		Arch:          runtime.GOARCH,
 		Self:          r.self,
+		EgressSocket:  r.egress,
 	})
 }
 
@@ -327,6 +333,7 @@ func (r *runner) edit(sel selection) (string, profile.Profile, error) {
 		Home:      r.dirs.Home,
 		Suggested: profile.Suggest(r.h, r.dirs.Home, sel.profile),
 		EnvHints:  envHints(r.h),
+		Blocked:   recentlyBlocked(r.dirs, r.prog.Name, sel.profile),
 		Exists: func(n string) bool {
 			_, err := os.Lstat(profile.Path(r.dirs, r.prog.Name, n))
 			return err == nil

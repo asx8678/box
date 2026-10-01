@@ -164,21 +164,43 @@ func TestNetworkSwitch(t *testing.T) {
 	}
 }
 
-// A restricted profile must never run with the whole network in place of
-// the allowlist box can't enforce yet; --net and --no-net still work.
-func TestRestrictedNetworkDoesNotRun(t *testing.T) {
+// A restricted profile reaches only what it allows, through box's proxy:
+// the box has no network of its own, so a program that ignores the proxy
+// gets nowhere. --no-net still works.
+func TestRestrictedNetwork(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("needs curl")
+	}
 	e := setup(t)
 	p := profile.Default("sh")
 	p.Network = profile.NetRestricted
 	p.Allow = profile.Allow{Hosts: []string{"example.com"}}
 	e.profile(p)
-	out, stderr, code := e.run("--no-tui", "sh", "-c", "echo ran")
-	if code != 125 || strings.Contains(out, "ran") || !strings.Contains(stderr, "can't enforce") {
-		t.Errorf("exit %d\nstdout: %s\nstderr: %s", code, out, stderr)
+	curl := `curl -sS -o /dev/null -w '%{http_code}' --max-time 20 `
+	if out, stderr, code := e.run("--no-tui", "sh", "-c", curl+"https://example.com"); code != 0 || out != "200" {
+		t.Fatalf("an allowed host: exit %d, %q\n%s", code, out, stderr)
+	}
+	if out, stderr, code := e.run("--no-tui", "sh", "-c", curl+"http://example.com"); code != 0 || out != "200" {
+		t.Errorf("plain http to an allowed host: exit %d, %q\n%s", code, out, stderr)
+	}
+	_, stderr, code := e.run("--no-tui", "sh", "-c", curl+"https://www.iana.org")
+	if code == 0 || !strings.Contains(stderr, "blocked 1 connection: www.iana.org:443") {
+		t.Errorf("a host not allowed: exit %d\n%s", code, stderr)
+	}
+	if _, _, code := e.run("--no-tui", "sh", "-c", curl+"--noproxy '*' https://example.com"); code == 0 {
+		t.Error("the program reached the network without the proxy")
+	}
+	log, _ := os.ReadFile(e.dirs.State + "/net.log")
+	if !strings.Contains(string(log), "sh/default\tblocked\twww.iana.org:443") {
+		t.Errorf("net.log:\n%s", log)
 	}
 	off, _, code := e.run("--no-tui", "--no-net", "sh", "-c", "tail -n +3 /proc/net/dev")
 	if code != 0 || strings.Count(off, ":") != 1 {
 		t.Errorf("--no-net on a restricted profile: exit %d\n%s", code, off)
+	}
+	// The proxy ends with the box and leaves no socket behind.
+	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("box-%d", os.Getuid()), "*.sock")); len(left) > 0 {
+		t.Errorf("sockets left behind: %v", left)
 	}
 }
 

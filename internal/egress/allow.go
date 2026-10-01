@@ -76,6 +76,12 @@ func parse(s string) (rule, error) {
 	return r, nil
 }
 
+// Allows reports whether the box may reach host:port.
+func (p *Policy) Allows(host string, port uint16) bool {
+	_, ok := p.match(host, port)
+	return ok
+}
+
 // match returns the rule that allows host:port. A name matches exact
 // entries and "*.suffix" entries with at least one more label in front;
 // an address matches only an address entry, so a program can't reach a

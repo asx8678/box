@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -71,6 +70,7 @@ func input(t *testing.T, f *host.Fake, p profile.Profile) Input {
 		LegacyTIOCSTI: "0",
 		Arch:          "amd64",
 		Self:          "/home/u/.local/bin/box",
+		EgressSocket:  "/run/user/1000/box/egress-1.sock",
 	}
 }
 
@@ -138,11 +138,29 @@ func TestRestrictedNetwork(t *testing.T) {
 	if slices.Contains(plan.Args(), "--share-net") {
 		t.Error("a restricted profile must not share the host's network")
 	}
-	if plan.Network != profile.NetRestricted || !errors.Is(plan.Runnable(), ErrNotEnforced) {
-		t.Errorf("network %q, runnable %v", plan.Network, plan.Runnable())
+	if plan.Network != profile.NetRestricted {
+		t.Errorf("network %q", plan.Network)
 	}
+	// The proxy socket is the only way out; the init runs the bridge to it,
+	// and the program's proxy variables point at the bridge.
+	if i := indexOf(t, plan, ROBind, EgressPath); plan.Mounts[i].Src != in.EgressSocket {
+		t.Errorf("socket mounted from %s", plan.Mounts[i].Src)
+	}
+	if !slices.Equal(plan.Command[:3], []string{InitPath, "--box-init", "--"}) {
+		t.Errorf("not under box's init: %v", plan.Command)
+	}
+	for _, kv := range []string{"HTTPS_PROXY=http://127.0.0.1:3128", "ALL_PROXY=socks5h://127.0.0.1:1080", "NODE_USE_ENV_PROXY=1"} {
+		if !slices.Contains(plan.Env, kv) {
+			t.Errorf("env lacks %s", kv)
+		}
+	}
+	in.EgressSocket = ""
+	if _, err := Build(f, in); err == nil {
+		t.Error("a restricted plan built without the proxy socket")
+	}
+	in.EgressSocket = "/run/user/1000/box/egress-1.sock"
 	dry := plan.DryRun("bwrap")
-	for _, want := range []string{"# Network: restricted", "runtime.us-east-1.kiro.dev", "learn.microsoft.com", "network=restricted", "Not enforced yet"} {
+	for _, want := range []string{"# Network: restricted", "runtime.us-east-1.kiro.dev", "learn.microsoft.com", "network=restricted"} {
 		if !strings.Contains(dry, want) {
 			t.Errorf("dry run lacks %q:\n%s", want, dry)
 		}
@@ -159,7 +177,7 @@ func TestRestrictedNetwork(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := map[bool]profile.NetMode{true: profile.NetOn, false: profile.NetOff}[on]
-		if plan.Network != want || plan.Runnable() != nil || slices.Contains(plan.Args(), "--share-net") != on {
+		if plan.Network != want || slices.Contains(plan.Args(), "--share-net") != on || slices.Contains(plan.Env, "NODE_USE_ENV_PROXY=1") {
 			t.Errorf("override %v: network %q, args %v", on, plan.Network, plan.Flags)
 		}
 		if strings.Contains(plan.DryRun("bwrap"), "Network: restricted") {

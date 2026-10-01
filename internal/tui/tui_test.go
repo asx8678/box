@@ -632,3 +632,18 @@ func TestControlCharactersAreShownEscaped(t *testing.T) {
 		t.Error("a raw escape sequence from a folder name reached the screen")
 	}
 }
+
+func TestAllowABlockedHostWithOneClick(t *testing.T) {
+	e := newTestEditor(t)
+	e.opts.Blocked = nil
+	e.blocked = []string{"x.example.com", "y.example.com:8443"}
+	e.p.Network = profile.NetRestricted
+	e.width, e.height = 100, 60
+	clickOn(t, e, e.hitsFn(), "b:1")
+	if !slices.Contains(e.hosts, "y.example.com:8443") || slices.Contains(e.blocked, "y.example.com:8443") {
+		t.Errorf("hosts %v, blocked %v", e.hosts, e.blocked)
+	}
+	if !strings.Contains(plain(e.View().Content), "+ x.example.com") {
+		t.Error("the other blocked host should still be offered")
+	}
+}

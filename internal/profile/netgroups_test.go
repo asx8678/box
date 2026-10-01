@@ -68,7 +68,7 @@ func TestNetGroupsData(t *testing.T) {
 			t.Errorf("%s: needs a label and hosts", g.ID)
 		}
 		switch g.Kind {
-		case "docs", "service":
+		case "docs", "packages", "service":
 			if len(g.Programs) > 0 {
 				t.Errorf("%s: only program groups name programs", g.ID)
 			}

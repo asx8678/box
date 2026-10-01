@@ -10,6 +10,9 @@
 # kind = "docs": official documentation, run by the project itself and
 #   read-only for visitors. Exact hosts only, never a wildcard, so nobody
 #   else's subdomain comes along.
+# kind = "packages": a package registry. Packages can be anyone's, and run
+#   code when installed; inside the box that code is contained like the
+#   program, but what it writes into the project stays.
 # kind = "service": a service the program may use. A note says when the
 #   hosts also reach other people's accounts: a host name can't tell your
 #   account from someone else's.
@@ -50,6 +53,7 @@ hosts = [
   "q.us-east-1.amazonaws.com",                # the Kiro service, older endpoint, still required
   "q.eu-central-1.amazonaws.com",
   "cognito-identity.us-east-1.amazonaws.com", # signing in with Google or GitHub
+  "cli.kiro.dev",                             # kiro-cli's own service (backlog item 80)
 ]
 
 [[group]]
@@ -108,7 +112,58 @@ id = "aws"
 label = "AWS"
 kind = "service"
 note = "Reaches every AWS account and S3 bucket, not only yours. Tighter: leave it off and add the hosts you use."
-hosts = ["*.amazonaws.com"]
+hosts = [
+  "*.amazonaws.com",
+  "*.api.aws", # newer service endpoints, such as dual-stack ones
+]
+
+[[group]]
+id = "github"
+label = "GitHub"
+kind = "service"
+note = "Repositories, releases and the API. Reaches every GitHub repository and user content, not only yours."
+hosts = [
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",     # archives of a repository
+  "*.githubusercontent.com", # raw files, release downloads, avatars
+]
+
+# Package registries: the hosts each one's own tools download from.
+[[group]]
+id = "npm"
+label = "npm"
+kind = "packages"
+note = "The public npm registry: every package anyone has published."
+hosts = ["registry.npmjs.org", "registry.yarnpkg.com"]
+
+[[group]]
+id = "pypi"
+label = "PyPI"
+kind = "packages"
+note = "The Python Package Index, for pip and uv: every package anyone has published."
+hosts = ["pypi.org", "files.pythonhosted.org"]
+
+[[group]]
+id = "crates"
+label = "crates.io"
+kind = "packages"
+note = "Rust's registry, for cargo: every crate anyone has published."
+hosts = ["crates.io", "index.crates.io", "static.crates.io"]
+
+[[group]]
+id = "go-modules"
+label = "Go modules"
+kind = "packages"
+note = "Go's module mirror and checksum database. Modules not in the mirror come from their own hosts: add those under Custom."
+hosts = ["proxy.golang.org", "sum.golang.org"]
+
+[[group]]
+id = "maven"
+label = "Maven Central"
+kind = "packages"
+note = "Java's central repository, for Maven and Gradle."
+hosts = ["repo.maven.apache.org", "repo1.maven.org"]
 
 # https://learn.microsoft.com/azure/devops/organizations/security/allow-list-ip-url
 [[group]]

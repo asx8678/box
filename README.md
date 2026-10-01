@@ -84,7 +84,10 @@ Any program starts from the same default: project read-write, network off, nothi
 ## Known limits
 
 - **Network on** means the whole network: the internet, your LAN, the Windows host on WSL and local services.
-- **Network restricted** isn't enforced yet. The editor lets you limit a program to its own servers plus the documentation sites and services (AWS, Azure DevOps) you tick and the custom domains or IP addresses you add, and `--dry-run` shows the list. box refuses to run such a profile until the proxy in [docs/v2-network-design.md](docs/v2-network-design.md) is built, because it won't open the whole network in its place.
+- **Network restricted** limits a program to its own servers, plus the documentation sites, package registries (npm, PyPI, crates.io, Go modules, Maven Central) and services (GitHub, AWS, Azure DevOps) you tick, plus the custom domains or IP addresses you add. The box gets no network of its own. Its only way out is a proxy that box runs on the host while the program runs. Programs reach it through the standard proxy variables, which box sets (`HTTPS_PROXY`, `ALL_PROXY`, and `NODE_USE_ENV_PROXY` for Node.js); a program that ignores them gets no network at all.
+  - The proxy checks the host *name*, then resolves it on the host. A name from box's lists that resolves to a private address (your LAN, the WSL host) is refused, so it can't lead into your network; a custom host you typed may, for a company server.
+  - TCP only: HTTP/3 falls back to TCP, and git over SSH, UDP and address ranges aren't supported yet.
+  - After the program exits, box says what was blocked. `box -e <program>` then offers each blocked host under **Blocked lately**, to allow with one click; `box --net-log` shows the recent log (in `~/.local/state/box/net.log`).
 - **Ctrl+C** can end the whole box, not just the program, when the program isn't a full-screen app: bwrap passes the signal on and then stops the sandbox. Full-screen programs and shells aren't affected. `init = true` under `[sandbox]` in a profile runs the program under box's own small init, which gives it the terminal so Ctrl+C reaches only the program (Ctrl+Z is then ignored).
 - **No GPU** inside the box on WSL.
 - **Terminal injection** is blocked by current kernels, including WSL's. On kernels that still allow it (before Linux 6.2, such as Debian 12) box blocks it with a seccomp filter. On WSL the same filter blocks the VM's sockets to the Windows host (`AF_VSOCK`).
@@ -99,6 +102,6 @@ make vet
 ./scripts/m6-check.sh   # 10 quick checks against real bwrap (Linux/WSL)
 ```
 
-Real-program checks (Kiro CLI, Kiro Crew, Node, Burrito) are in [docs/m6-runbook.md](docs/m6-runbook.md); the planned per-domain network allowlist is in [docs/v2-network-design.md](docs/v2-network-design.md).
+Real-program checks (Kiro CLI, Kiro Crew, Node, Burrito) are in [docs/m6-runbook.md](docs/m6-runbook.md); the restricted network's design is in [docs/v2-network-design.md](docs/v2-network-design.md).
 
 The design is in [docs/architecture.md](docs/architecture.md), and the corrections and milestones are in [docs/implementation-plan.md](docs/implementation-plan.md).

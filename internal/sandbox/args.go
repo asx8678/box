@@ -112,15 +112,15 @@ func (p *Plan) DryRun(bwrap string) string {
 		b.WriteString("# box also applies a Landlock scope blocking abstract Unix sockets outside the box.\n")
 	}
 	if p.Network == profile.NetRestricted {
-		b.WriteString("# Network: restricted. The box has no network of its own; only these hosts are\n" +
-			"# reachable, through box's proxy:\n")
+		b.WriteString("# Network: restricted. The box has no network of its own. box runs a proxy on the\n" +
+			"# socket above while the program runs, and only these hosts are reachable through it:\n")
 		for _, set := range p.Allowed {
 			fmt.Fprintf(&b, "#   %s: %s\n", set.Name, strings.Join(set.Hosts, ", "))
 		}
 		if len(p.Allowed) == 0 {
 			b.WriteString("#   nothing: the profile allows no hosts\n")
 		}
-		b.WriteString("# Not enforced yet: the proxy isn't built, so box refuses to run this profile.\n")
+		b.WriteString("# So pasting this command gives a box with no network at all.\n")
 	}
 	return b.String()
 }

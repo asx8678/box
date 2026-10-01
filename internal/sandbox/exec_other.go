@@ -12,6 +12,11 @@ func Exec(bwrap string, plan *Plan) error {
 	return ErrNeedsLinux
 }
 
+// Spawn always fails outside Linux.
+func Spawn(bwrap string, plan *Plan) (int, error) {
+	return ExitBox, ErrNeedsLinux
+}
+
 // LandlockABI is 0 outside Linux.
 func LandlockABI() int { return 0 }
 

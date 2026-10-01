@@ -1,14 +1,23 @@
 env -i /usr/bin/bwrap \
   --unshare-all --die-with-parent \
+  --setenv ALL_PROXY socks5h://127.0.0.1:1080 \
   --setenv BOX_PROFILE kiro-cli/default \
   --setenv HOME /home/u \
+  --setenv HTTPS_PROXY http://127.0.0.1:3128 \
+  --setenv HTTP_PROXY http://127.0.0.1:3128 \
   --setenv KIRO_API_KEY "$KIRO_API_KEY" \
   --setenv LANG C.UTF-8 \
   --setenv LC_TIME en_GB.UTF-8 \
+  --setenv NODE_USE_ENV_PROXY 1 \
+  --setenv NO_PROXY localhost,127.0.0.1,::1 \
   --setenv PATH /home/u/.local/bin:/usr/local/bin:/usr/bin:/bin \
   --setenv PWD /home/u/code/proj \
   --setenv TERM xterm-256color \
   --setenv TMPDIR /tmp \
+  --setenv all_proxy socks5h://127.0.0.1:1080 \
+  --setenv http_proxy http://127.0.0.1:3128 \
+  --setenv https_proxy http://127.0.0.1:3128 \
+  --setenv no_proxy localhost,127.0.0.1,::1 \
   --seccomp 4 \
   --ro-bind /usr /usr \
   --symlink usr/bin /bin \
@@ -41,21 +50,23 @@ env -i /usr/bin/bwrap \
   --bind /home/u/.local/share/box/homes/kiro-cli/default /home/u \
   --ro-bind-data 3 /run/box/profile \
   --ro-bind /home/u/.kiro /home/u/.kiro \
+  --ro-bind /run/user/1000/box/egress-1.sock /run/box/egress.sock \
+  --ro-bind /home/u/.local/bin/box /run/box/box \
   --bind /home/u/code/proj /home/u/code/proj \
   --ro-bind /home/u/.local/bin /home/u/.local/bin \
   --bind /home/u/.local/share/kiro-cli /home/u/.local/share/kiro-cli \
   --ro-bind /home/u/code/proj/.git /home/u/code/proj/.git \
   --chdir /home/u/code/proj \
-  -- /home/u/.local/bin/kiro-cli chat 'it'\''s a test' \
+  -- /run/box/box --box-init -- /home/u/.local/bin/kiro-cli chat 'it'\''s a test' \
   3<<<'program=kiro-cli
 profile=default
 network=restricted
 workdir=/home/u/code/proj'
 # fd 4: box's seccomp filter, blocking VM sockets to the Windows host (AF_VSOCK); box passes it at run time,
 # so pasting this command needs that fd or the --seccomp line removed.
-# Network: restricted. The box has no network of its own; only these hosts are
-# reachable, through box's proxy:
-#   kiro-cli's own servers: app.kiro.dev, assets.app.kiro.dev, prod.us-east-1.auth.desktop.kiro.dev, runtime.us-east-1.kiro.dev, runtime.eu-central-1.kiro.dev, management.us-east-1.kiro.dev, management.eu-central-1.kiro.dev, q.us-east-1.amazonaws.com, q.eu-central-1.amazonaws.com, cognito-identity.us-east-1.amazonaws.com
+# Network: restricted. The box has no network of its own. box runs a proxy on the
+# socket above while the program runs, and only these hosts are reachable through it:
+#   kiro-cli's own servers: app.kiro.dev, assets.app.kiro.dev, prod.us-east-1.auth.desktop.kiro.dev, runtime.us-east-1.kiro.dev, runtime.eu-central-1.kiro.dev, management.us-east-1.kiro.dev, management.eu-central-1.kiro.dev, q.us-east-1.amazonaws.com, q.eu-central-1.amazonaws.com, cognito-identity.us-east-1.amazonaws.com, cli.kiro.dev
 #   docs-microsoft: learn.microsoft.com
 #   custom: wiki.example.com
-# Not enforced yet: the proxy isn't built, so box refuses to run this profile.
+# So pasting this command gives a box with no network at all.

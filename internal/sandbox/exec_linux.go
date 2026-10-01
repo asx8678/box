@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -166,31 +167,88 @@ func memfd(name string, data []byte) (int, error) {
 // Exec replaces box with bwrap. It only returns on failure, and then
 // nothing has run: box never falls back to running unsandboxed.
 func Exec(bwrap string, plan *Plan) error {
-	if err := plan.Runnable(); err != nil {
+	fds, err := handOver(plan)
+	if err != nil {
 		return err
 	}
+	// Landlock and no_new_privs apply to the calling thread, so the thread
+	// that sets them must be the one that calls execve.
+	runtime.LockOSThread()
+	if plan.Landlock {
+		if err := landlockScope(); err != nil {
+			return err
+		}
+	}
+	err = syscall.Exec(bwrap, plan.argv(fds), []string{})
+	return fmt.Errorf("exec %s: %w", bwrap, err)
+}
+
+// Spawn runs bwrap as box's child and returns its exit code, for a plan
+// whose network goes through box's proxy: box stays alive to run it.
+// Ctrl+C and Ctrl+\ reach the box's program through the terminal, so box
+// itself waits them out; a kill of box is passed on.
+func Spawn(bwrap string, plan *Plan) (int, error) {
+	fds, err := handOver(plan)
+	if err != nil {
+		return ExitBox, err
+	}
+	files := []*os.File{os.Stdin, os.Stdout, os.Stderr}
+	child := make([]int, len(fds)) // their numbers in bwrap: 3, 4, …
+	for i, fd := range fds {
+		files = append(files, os.NewFile(uintptr(fd), "box-fd"))
+		child[i] = 3 + i
+	}
+	sigs := make(chan os.Signal, 4)
+	signal.Notify(sigs, unix.SIGINT, unix.SIGQUIT, unix.SIGTERM, unix.SIGHUP)
+	defer signal.Stop(sigs)
+	p, err := os.StartProcess(bwrap, plan.argv(child), &os.ProcAttr{Env: []string{}, Files: files})
+	for _, f := range files[3:] {
+		f.Close()
+	}
+	if err != nil {
+		return ExitBox, fmt.Errorf("starting %s: %w", bwrap, err)
+	}
+	go func() {
+		for s := range sigs {
+			if s == unix.SIGTERM || s == unix.SIGHUP {
+				p.Signal(s)
+			}
+		}
+	}()
+	st, err := p.Wait()
+	if err != nil {
+		return ExitBox, err
+	}
+	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal()), nil
+	}
+	return st.ExitCode(), nil
+}
+
+// handOver gets the terminal and the descriptors ready for bwrap and
+// returns the descriptors, in the order argv refers to them: the
+// environment, the info file, and the seccomp filter if there is one.
+func handOver(plan *Plan) ([]int, error) {
 	// Only the descriptors made below reach bwrap, and bwrap closes them
 	// once read: nothing else box inherited leaks into the sandbox.
 	if err := closeOnExec(); err != nil {
-		return err
+		return nil, err
 	}
-	envFD, err := memfd("box-env", plan.EnvArgs())
-	if err != nil {
-		return err
-	}
-	fd, err := memfd("box-profile", plan.Info)
-	if err != nil {
-		return err
-	}
-	plan.InfoFD = fd
+	data := [][]byte{plan.EnvArgs(), plan.Info}
 	if plan.Filter.Any() {
 		prog, err := SeccompProgram(runtime.GOARCH, plan.Filter)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if plan.SeccompFD, err = memfd("box-seccomp", prog); err != nil {
-			return err
+		data = append(data, prog)
+	}
+	var fds []int
+	for _, d := range data {
+		fd, err := memfd("box", d)
+		if err != nil {
+			return nil, err
 		}
+		fds = append(fds, fd)
 	}
 	// The TUI may leave the terminal non-blocking; programs expect blocking stdio.
 	for _, std := range []int{0, 1, 2} {
@@ -201,20 +259,20 @@ func Exec(bwrap string, plan *Plan) error {
 		// program would read them as typed input.
 		unix.IoctlSetInt(0, unix.TCFLSH, unix.TCIFLUSH)
 	}
-	// Landlock and no_new_privs apply to the calling thread, so the thread
-	// that sets them must be the one that calls execve.
-	runtime.LockOSThread()
-	if plan.Landlock {
-		if err := landlockScope(); err != nil {
-			return err
-		}
+	return fds, nil
+}
+
+// argv is bwrap's command line with the descriptors from handOver, as
+// bwrap will see them. bwrap itself gets no environment: a variable such
+// as LD_PRELOAD from the profile would otherwise load into bwrap, before
+// any sandbox exists. The program's environment arrives as --setenv
+// operations through --args.
+func (plan *Plan) argv(fds []int) []string {
+	plan.InfoFD = fds[1]
+	if len(fds) > 2 {
+		plan.SeccompFD = fds[2]
 	}
-	// bwrap itself gets no environment: a variable such as LD_PRELOAD from
-	// the profile would otherwise load into bwrap, before any sandbox exists.
-	// The program's environment arrives as --setenv operations through --args.
-	argv := append([]string{"bwrap", "--args", strconv.Itoa(envFD)}, plan.Args()...)
-	err = syscall.Exec(bwrap, argv, []string{})
-	return fmt.Errorf("exec %s: %w", bwrap, err)
+	return append([]string{"bwrap", "--args", strconv.Itoa(fds[0])}, plan.Args()...)
 }
 
 // closeOnExec marks every descriptor from 3 up close-on-exec.
