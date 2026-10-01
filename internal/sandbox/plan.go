@@ -102,6 +102,8 @@ type Plan struct {
 	// FlushInput asks exec to discard pending terminal input, such as
 	// replies to the TUI's capability queries.
 	FlushInput bool
+	// Notes are things the user should know about this sandbox.
+	Notes []string
 }
 
 // usrMerged are top-level folders that are symlinks into /usr on most
@@ -240,6 +242,7 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		Create:   b.create,
 		Landlock: p.Sandbox.Landlock && network == profile.NetOn,
 		Network:  network,
+		Notes:    b.notes,
 	}
 	if network == profile.NetRestricted {
 		plan.Allowed = p.Allowed()
@@ -296,6 +299,7 @@ type builder struct {
 	mounts  []Mount
 	create  []string
 	rwRoots []string // host folders the program can write, same path inside
+	notes   []string // things the user should know, printed before the run
 }
 
 func (b *builder) add(k Kind, src, dest string) {
@@ -326,8 +330,8 @@ func (b *builder) system() error {
 	return nil
 }
 
-// workdir mounts the project folder, keeping .git/config and .git/hooks
-// read-only in a read-write project when the profile asks.
+// workdir mounts the project folder, keeping git's files read-only in a
+// read-write project as far as the profile asks.
 func (b *builder) workdir(dir string, w profile.Workdir) (string, error) {
 	wd, err := profile.Canonical(b.h, dir)
 	if err != nil {
@@ -347,10 +351,10 @@ func (b *builder) workdir(dir string, w profile.Workdir) (string, error) {
 		return "", err
 	}
 	b.add(Bind, wd, wd)
-	if w.ProtectGit {
-		return wd, b.protectGit(wd)
+	if w.ProtectGit == profile.GitOff {
+		return wd, nil
 	}
-	return wd, nil
+	return wd, b.protectGit(wd, w.ProtectGit)
 }
 
 // programDirs mounts the program's own folders, and those of the tools it
@@ -533,19 +537,101 @@ func covering(mounts []Mount, dest string) (Mount, bool) {
 	return mounts[best], true
 }
 
-// protectGit keeps .git/config and .git/hooks read-only in a read-write
-// project: whoever can write them runs code the next time git runs outside.
-func (b *builder) protectGit(wd string) error {
-	gitDir := filepath.Join(wd, ".git")
-	fi, err := b.h.Lstat(gitDir)
+// Nested repositories are looked for this deep below the project, in at
+// most this many folders, so a huge project doesn't slow every start.
+const (
+	repoDepth   = 4
+	repoFolders = 500
+)
+
+// protectGit keeps git's files read-only in a read-write project: whoever
+// can write them runs code the next time git runs outside. GitFull covers all
+// of .git, and gives a project without one an empty read-only .git, so the
+// program can't git init one with hooks; GitHooks covers config and hooks.
+// Repositories nested in the project are protected the same way. One the
+// program creates in a subfolder can't be: see the README.
+func (b *builder) protectGit(wd string, mode profile.GitMode) error {
+	top := filepath.Join(wd, ".git")
+	if _, err := b.h.Lstat(top); err != nil && mode == profile.GitFull {
+		b.create = append(b.create, top)
+		b.add(ROBind, top, top)
+	}
+	for _, dot := range b.findRepos(wd) {
+		if err := b.protectRepo(wd, dot, mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// findRepos returns every .git (folder or file) in the project, the
+// project's own first, without following symlinks or entering .git folders.
+func (b *builder) findRepos(wd string) []string {
+	var found []string
+	type dir struct {
+		path  string
+		depth int
+	}
+	queue, seen := []dir{{wd, 0}}, 0
+	for len(queue) > 0 && seen < repoFolders {
+		d := queue[0]
+		queue = queue[1:]
+		seen++
+		entries, err := b.h.ReadDir(d.path)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			p := filepath.Join(d.path, e.Name())
+			switch {
+			case e.Name() == ".git":
+				found = append(found, p)
+			case e.IsDir() && d.depth < repoDepth && e.Name() != "node_modules":
+				queue = append(queue, dir{p, d.depth + 1})
+			}
+		}
+	}
+	if seen == repoFolders && len(queue) > 0 {
+		b.notes = append(b.notes, fmt.Sprintf("the project is large: only %d of its folders were searched for nested "+
+			"git repositories to protect", repoFolders))
+	}
+	return found
+}
+
+// protectRepo protects one .git: a folder, or a file naming the real one
+// (a worktree or submodule), whose pointer is then kept read-only too.
+func (b *builder) protectRepo(wd, dot string, mode profile.GitMode) error {
+	fi, err := b.h.Lstat(dot)
 	if err != nil {
-		return nil // not a git repository
+		return nil
 	}
-	if fi.Mode()&fs.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; refusing to guess what it protects", gitDir)
+	gitDir := dot
+	switch {
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return fmt.Errorf("%s is a symlink; refusing to guess what it protects", dot)
+	case !fi.IsDir():
+		data, err := b.h.ReadFile(dot)
+		if err != nil {
+			return err
+		}
+		target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+		if !ok {
+			return fmt.Errorf("%s is a file but doesn't name a git folder (gitdir: …)", dot)
+		}
+		if target = strings.TrimSpace(target); !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(dot), target)
+		}
+		if gitDir, err = profile.Canonical(b.h, target); err != nil {
+			return err
+		}
+		b.readOnly(dot)
+		if !profile.Within(gitDir, wd) {
+			return nil // outside the project: not in the box unless the profile lists it
+		}
 	}
-	if !fi.IsDir() {
-		return nil // a worktree's .git file
+	if mode == profile.GitFull {
+		b.readOnly(gitDir)
+		return nil
 	}
 	for _, name := range []string{"config", "hooks"} {
 		p := filepath.Join(gitDir, name)
@@ -561,9 +647,16 @@ func (b *builder) protectGit(wd string) error {
 		if fi.Mode()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("%s is a symlink; refusing to guess what it protects", p)
 		}
-		b.add(ROBind, p, p)
+		b.readOnly(p)
 	}
 	return nil
+}
+
+// readOnly mounts path read-only at its own place, unless it already is.
+func (b *builder) readOnly(path string) {
+	if !b.readOnlyCovers(path, slices.IndexFunc(b.mounts, func(m Mount) bool { return m.Dest == path })) {
+		b.add(ROBind, path, path)
+	}
 }
 
 func depth(p string) int {

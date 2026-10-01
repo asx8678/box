@@ -70,7 +70,7 @@ func TestParseKeepsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Workdir.Mode != "rw" || !p.Workdir.ProtectGit || p.Network != NetOff {
+	if p.Workdir.Mode != "rw" || p.Workdir.ProtectGit != GitFull || p.Network != NetOff {
 		t.Errorf("defaults lost: %+v", p)
 	}
 }

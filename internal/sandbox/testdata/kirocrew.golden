@@ -45,9 +45,7 @@ env -i /usr/bin/bwrap \
   --bind /home/u/code/proj /home/u/code/proj \
   --ro-bind /home/u/.local/bin /home/u/.local/bin \
   --bind /home/u/.local/share/kiro-cli /home/u/.local/share/kiro-cli \
-  --bind /home/u/code/proj/.git /home/u/code/proj/.git \
-  --ro-bind /home/u/code/proj/.git/config /home/u/code/proj/.git/config \
-  --ro-bind /home/u/code/proj/.git/hooks /home/u/code/proj/.git/hooks \
+  --ro-bind /home/u/code/proj/.git /home/u/code/proj/.git \
   --chdir /home/u/code/proj \
   -- /home/u/.local/bin/kiro-cli chat 'it'\''s a test' \
   3<<<'program=kirocrew

@@ -113,6 +113,9 @@ func (p Profile) Validate(program string) error {
 	if p.Workdir.Mode != "rw" && p.Workdir.Mode != "ro" {
 		add("workdir.mode must be \"rw\" or \"ro\", not %q", p.Workdir.Mode)
 	}
+	if g := p.Workdir.ProtectGit; g != GitFull && g != GitHooks && g != GitOff {
+		add("workdir.protect_git must be \"full\", \"hooks\" or \"off\", not %q", g)
+	}
 	if p.Network != NetOff && p.Network != NetRestricted && p.Network != NetOn {
 		add("network must be \"off\", \"restricted\" or \"on\", not %q", p.Network)
 	}

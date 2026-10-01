@@ -240,6 +240,9 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	if err := plan.Runnable(); err != nil {
 		return ExitBox, fmt.Errorf("%w\n     nothing ran; until then use --net (whole network) or --no-net (none) for one run, or -e to change the profile", err)
 	}
+	for _, n := range plan.Notes {
+		fmt.Fprintf(stderr, "box: note: %s\n", n)
+	}
 	if plan.NewSession {
 		fmt.Fprintln(stderr, "box: this kernel allows terminal injection, so the program runs detached "+
 			"from the terminal (no resize, no job control)")

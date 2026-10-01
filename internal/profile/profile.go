@@ -73,8 +73,36 @@ type Allow struct {
 
 // Workdir is how the folder box runs in is mounted.
 type Workdir struct {
-	Mode       string `toml:"mode"`        // "rw" or "ro"
-	ProtectGit bool   `toml:"protect_git"` // keep .git/config and .git/hooks read-only
+	Mode       string  `toml:"mode"`        // "rw" or "ro"
+	ProtectGit GitMode `toml:"protect_git"` // what of git stays read-only in a read-write project
+}
+
+// GitMode is how much of a read-write project's git folders stays
+// read-only: whoever can write them runs code the next time git runs
+// outside the box.
+type GitMode string
+
+const (
+	GitFull  GitMode = "full"  // all of .git: safest, but the program can't commit
+	GitHooks GitMode = "hooks" // .git/config and .git/hooks only: commits work
+	GitOff   GitMode = "off"
+)
+
+// UnmarshalTOML also reads the true and false that profiles used before the
+// modes existed: true kept config and hooks read-only.
+func (m *GitMode) UnmarshalTOML(v any) error {
+	switch v := v.(type) {
+	case bool:
+		*m = GitOff
+		if v {
+			*m = GitHooks
+		}
+	case string:
+		*m = GitMode(v)
+	default:
+		return fmt.Errorf("protect_git must be \"full\", \"hooks\" or \"off\"")
+	}
+	return nil
 }
 
 // Mounts lists host folders mounted at the same path inside the sandbox.
@@ -113,7 +141,7 @@ func Default(program string) Profile {
 		Version: Version,
 		Program: program,
 		Network: NetOff,
-		Workdir: Workdir{Mode: "rw", ProtectGit: true},
+		Workdir: Workdir{Mode: "rw", ProtectGit: GitFull},
 		Env:     Env{Set: map[string]string{}},
 	}
 }

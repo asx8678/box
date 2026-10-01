@@ -259,6 +259,7 @@ func TestNestedMountsComeAfterTheirParent(t *testing.T) {
 	f := machine()
 	p := profile.Default("mytool")
 	p.Extra.RO = []string{"~/code/proj/secrets"}
+	p.Workdir.ProtectGit = profile.GitHooks
 	plan, err := Build(f, input(t, f, p))
 	if err != nil {
 		t.Fatal(err)
@@ -468,6 +469,7 @@ func TestProtectedFoldersCantBeRenamedAside(t *testing.T) {
 	f.Dir("/home/u/.kiro/crew/venv")
 	p := profile.Default("kirocrew")
 	p.Home.RW = []string{"~/.kiro"}
+	p.Workdir.ProtectGit = profile.GitHooks
 	in := input(t, f, p)
 	in.ProgramDirs = []string{"/home/u/.kiro/crew/venv"}
 	plan, err := Build(f, in)
@@ -489,7 +491,9 @@ func TestProtectedFoldersCantBeRenamedAside(t *testing.T) {
 func TestMissingGitHooksAreCreatedReadOnly(t *testing.T) {
 	f := machine()
 	f.Dir("/home/u/code/nohooks/.git").File("/home/u/code/nohooks/.git/config", "", 0o644)
-	in := input(t, f, profile.Default("mytool"))
+	p := profile.Default("mytool")
+	p.Workdir.ProtectGit = profile.GitHooks
+	in := input(t, f, p)
 	in.Workdir = "/home/u/code/nohooks"
 	plan, err := Build(f, in)
 	if err != nil {
@@ -589,5 +593,84 @@ func TestScriptCantSteerMountsToSecrets(t *testing.T) {
 	in.Program, in.ProgramDirs = prog.Path, prog.Dirs
 	if _, err := Build(f, in); err == nil || !strings.Contains(err.Error(), "holds credentials") {
 		t.Fatalf("got %v, want a refusal naming credentials", err)
+	}
+}
+
+func TestGitProtection(t *testing.T) {
+	const proj = "/home/u/code/g"
+	ro := func(paths ...string) []string { return paths }
+	tests := []struct {
+		name   string
+		mode   profile.GitMode
+		layout func(f *host.Fake)
+		ro     []string // read-only binds of these paths, at their own place
+		create []string
+		notRO  []string
+	}{
+		{"full: plain repo", profile.GitFull, func(f *host.Fake) { f.Dir(proj + "/.git/hooks") },
+			ro(proj + "/.git"), nil, ro(proj + "/.git/hooks")},
+		{"full: no repo gets an empty read-only .git", profile.GitFull, func(f *host.Fake) { f.Dir(proj) },
+			ro(proj + "/.git"), ro(proj + "/.git"), nil},
+		{"full: nested repos", profile.GitFull, func(f *host.Fake) {
+			f.Dir(proj + "/.git").Dir(proj + "/vendor/lib/.git").Dir(proj + "/a/b/c/d/.git")
+		}, ro(proj+"/.git", proj+"/vendor/lib/.git", proj+"/a/b/c/d/.git"), nil, nil},
+		{"full: too deep isn't searched", profile.GitFull, func(f *host.Fake) {
+			f.Dir(proj + "/.git").Dir(proj + "/a/b/c/d/e/.git")
+		}, ro(proj + "/.git"), nil, ro(proj + "/a/b/c/d/e/.git")},
+		{"full: worktree .git file pointing outside", profile.GitFull, func(f *host.Fake) {
+			f.Dir("/home/u/code/main/.git/worktrees/g")
+			f.File(proj+"/.git", "gitdir: /home/u/code/main/.git/worktrees/g\n", 0o644)
+		}, ro(proj + "/.git"), nil, ro("/home/u/code/main/.git/worktrees/g")},
+		{"full: submodule .git file inside the project", profile.GitFull, func(f *host.Fake) {
+			f.Dir(proj + "/.git/modules/sub")
+			f.File(proj+"/sub/.git", "gitdir: ../.git/modules/sub\n", 0o644)
+		}, ro(proj+"/.git", proj+"/sub/.git"), nil, nil},
+		{"hooks: nested repo", profile.GitHooks, func(f *host.Fake) {
+			f.Dir(proj+"/.git/hooks").File(proj+"/.git/config", "", 0o644).Dir(proj + "/lib/.git")
+		}, ro(proj+"/.git/config", proj+"/.git/hooks", proj+"/lib/.git/hooks"), ro(proj + "/lib/.git/hooks"), ro(proj + "/.git")},
+		{"hooks: no repo stays as it is", profile.GitHooks, func(f *host.Fake) { f.Dir(proj) }, nil, nil, ro(proj + "/.git")},
+		{"off", profile.GitOff, func(f *host.Fake) { f.Dir(proj + "/.git/hooks") }, nil, nil, ro(proj+"/.git", proj+"/.git/hooks")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := machine()
+			tt.layout(f)
+			p := profile.Default("mytool")
+			p.Workdir.ProtectGit = tt.mode
+			in := input(t, f, p)
+			in.Workdir = proj
+			plan, err := Build(f, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			isRO := func(path string) bool {
+				return slices.ContainsFunc(plan.Mounts, func(m Mount) bool { return m.Kind == ROBind && m.Src == path && m.Dest == path })
+			}
+			for _, path := range tt.ro {
+				if !isRO(path) {
+					t.Errorf("%s isn't read-only", path)
+				}
+			}
+			for _, path := range tt.notRO {
+				if isRO(path) {
+					t.Errorf("%s is read-only", path)
+				}
+			}
+			for _, path := range tt.create {
+				if !slices.Contains(plan.Create, path) {
+					t.Errorf("%s isn't created: %v", path, plan.Create)
+				}
+			}
+		})
+	}
+}
+
+func TestGitFileWithoutGitdirIsRefused(t *testing.T) {
+	f := machine()
+	f.File("/home/u/code/g/.git", "nonsense", 0o644)
+	in := input(t, f, profile.Default("mytool"))
+	in.Workdir = "/home/u/code/g"
+	if _, err := Build(f, in); err == nil || !strings.Contains(err.Error(), "gitdir") {
+		t.Fatalf("got %v", err)
 	}
 }

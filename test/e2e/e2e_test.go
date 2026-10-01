@@ -213,12 +213,31 @@ func TestExitCodes(t *testing.T) {
 
 func TestGitConfigAndHooksStayReadOnly(t *testing.T) {
 	e := setup(t)
+	p := profile.Default("sh")
+	p.Workdir.ProtectGit = profile.GitHooks
+	e.profile(p)
 	os.MkdirAll(e.proj+"/.git/hooks", 0o755)
 	os.WriteFile(e.proj+"/.git/config", []byte("[core]\n"), 0o644)
 	e.sh(`set -e
 if echo '[core] fsmonitor = evil' >> .git/config 2>/dev/null; then exit 1; fi
 if touch .git/hooks/pre-commit 2>/dev/null; then exit 1; fi
 touch .git/index-like-file`)
+}
+
+// The default keeps all of .git read-only, and a project without a
+// repository gets an empty read-only .git, so git init can't plant hooks.
+func TestGitFolderStaysReadOnly(t *testing.T) {
+	e := setup(t)
+	e.sh(`set -e
+if mkdir .git/hooks 2>/dev/null; then exit 1; fi
+touch written`)
+	if fi, err := os.Stat(e.proj + "/.git"); err != nil || !fi.IsDir() {
+		t.Fatalf("no empty .git left as the mount point: %v", err)
+	}
+	os.MkdirAll(e.proj+"/.git/hooks", 0o755)
+	e.sh(`set -e
+if touch .git/HEAD 2>/dev/null; then exit 1; fi
+if touch .git/hooks/pre-commit 2>/dev/null; then exit 1; fi`)
 }
 
 func TestReadOnlyFolderInsideProject(t *testing.T) {

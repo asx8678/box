@@ -105,6 +105,9 @@ func (p *Plan) DryRun(bwrap string) string {
 			"# so pasting this command needs that fd or the --seccomp line removed.\n",
 			DryRunSeccompFD, strings.Join(blocks, " and "))
 	}
+	for _, n := range p.Notes {
+		b.WriteString("# Note: " + n + ".\n")
+	}
 	if p.Landlock {
 		b.WriteString("# box also applies a Landlock scope blocking abstract Unix sockets outside the box.\n")
 	}

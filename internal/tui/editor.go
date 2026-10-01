@@ -912,7 +912,11 @@ func (e *editor) describe(id string) string {
 	switch kind {
 	case "wd":
 		if action == "rw" {
-			return "The program can create, change and delete files in this project. .git/config and .git/hooks stay read-only."
+			git := map[profile.GitMode]string{
+				profile.GitFull:  " Git's own folder, .git, stays read-only, so the program can't commit.",
+				profile.GitHooks: " .git/config and .git/hooks stay read-only.",
+			}[e.p.Workdir.ProtectGit]
+			return "The program can create, change and delete files in this project." + git
 		}
 		return "The program can read this project but not change anything in it."
 	case "net":

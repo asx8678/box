@@ -40,7 +40,12 @@ box --doctor                             # checks bubblewrap and this machine
 | Network | off, on, or restricted to named hosts, per profile; `--net` / `--no-net` for one run |
 
 Also:
-- `.git/config` and `.git/hooks` stay read-only inside a read-write project, so a boxed program can't plant a command that runs the next time you use git.
+- Git's folder stays read-only inside a read-write project, so a boxed program can't plant a hook or setting that runs the next time you use git. `protect_git` under `[workdir]` chooses how much:
+  - `"full"` (the default): all of `.git`. The program can read history but can't commit. A project with no repository gets an empty read-only `.git`, so the program can't `git init` one; box leaves that empty folder in the project.
+  - `"hooks"`: only `.git/config` and `.git/hooks`, so the program can commit. Profiles from before this setting load as `"hooks"`.
+  - `"off"`: nothing.
+
+  Repositories nested in the project (to 4 folders deep) and submodules are protected the same way. One the program creates itself in a subfolder can't be: run git in such a folder only after checking it.
 - box refuses read-write access to folders on your `PATH`, shell startup files, `~/.ssh` and box's own settings, and it never mounts Docker or other daemon sockets.
 - box refuses to run a Windows program (`.exe` or anything under `/mnt/c`), because it would run outside Linux.
 

@@ -207,6 +207,25 @@ func (f *Fake) ReadFile(p string) ([]byte, error) {
 	return append([]byte(nil), n.data...), nil
 }
 
+// ReadDir lists a directory, sorted by name, like os.ReadDir.
+func (f *Fake) ReadDir(p string) ([]fs.DirEntry, error) {
+	real, n, err := f.resolve("open", p, true)
+	if err != nil {
+		return nil, err
+	}
+	if n.kind != kindDir {
+		return nil, &fs.PathError{Op: "readdirent", Path: p, Err: syscall.ENOTDIR}
+	}
+	var out []fs.DirEntry
+	for path, child := range f.nodes {
+		if path != "/" && filepath.Dir(path) == real {
+			out = append(out, fs.FileInfoToDirEntry(info{name: filepath.Base(path), n: child}))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out, nil
+}
+
 func (f *Fake) ReadPrefix(p string, n int) ([]byte, error) {
 	data, err := f.ReadFile(p)
 	if len(data) > n {
