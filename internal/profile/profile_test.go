@@ -15,7 +15,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "profiles", "kiro-cli", "default.toml")
 	p := Default("kiro-cli")
-	p.Network = true
+	p.Network = NetOn
 	p.Home.RW = []string{"~/.local/share/kiro-cli"}
 	p.Extra.RO = []string{"/opt/lib"}
 	p.Env.Pass = []string{"AWS_PROFILE"}
@@ -70,7 +70,7 @@ func TestParseKeepsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Workdir.Mode != "rw" || !p.Workdir.ProtectGit || p.Network {
+	if p.Workdir.Mode != "rw" || !p.Workdir.ProtectGit || p.Network != NetOff {
 		t.Errorf("defaults lost: %+v", p)
 	}
 }

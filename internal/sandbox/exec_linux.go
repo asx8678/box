@@ -166,6 +166,9 @@ func memfd(name string, data []byte) (int, error) {
 // Exec replaces box with bwrap. It only returns on failure, and then
 // nothing has run: box never falls back to running unsandboxed.
 func Exec(bwrap string, plan *Plan) error {
+	if err := plan.Runnable(); err != nil {
+		return err
+	}
 	fd, err := memfd("box-profile", plan.Info)
 	if err != nil {
 		return err

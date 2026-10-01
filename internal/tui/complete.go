@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +49,22 @@ func dirSuggestions(raw, home string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// cleanHost tidies a typed or pasted host or IP address: lower case, of a
+// pasted URL only the host (and port), and an address in its usual form.
+func cleanHost(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if _, rest, ok := strings.Cut(s, "://"); ok {
+		s, _, _ = strings.Cut(rest, "/")
+	}
+	if bare, ok := strings.CutPrefix(s, "["); ok && strings.HasSuffix(bare, "]") {
+		s = strings.TrimSuffix(bare, "]") // a URL's [IPv6] without a port
+	}
+	if addr, err := netip.ParseAddr(s); err == nil {
+		return addr.String()
+	}
+	return s
 }
 
 // cleanInput tidies a typed folder path: no trailing slash, "~" kept.

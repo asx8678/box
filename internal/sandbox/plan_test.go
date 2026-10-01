@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -83,15 +84,23 @@ func preset(t *testing.T, program string) profile.Profile {
 }
 
 func TestGolden(t *testing.T) {
-	for _, name := range []string{"generic", "kiro-cli", "kirocrew", "bash"} {
+	for _, name := range []string{"generic", "kiro-cli", "kirocrew", "bash", "restricted"} {
 		t.Run(name, func(t *testing.T) {
 			f := machine()
 			f.Dir("/home/u/workplace")
 			program := name
-			if name == "generic" {
+			switch name {
+			case "generic":
 				program = "mytool"
+			case "restricted":
+				program = "kiro-cli"
 			}
-			plan, err := Build(f, input(t, f, preset(t, program)))
+			p := preset(t, program)
+			if name == "restricted" {
+				p.Network = profile.NetRestricted
+				p.Allow = profile.Allow{Groups: []string{"docs-microsoft"}, Hosts: []string{"wiki.example.com"}}
+			}
+			plan, err := Build(f, input(t, f, p))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,6 +119,52 @@ func TestGolden(t *testing.T) {
 				t.Errorf("dry run differs from %s (run go test ./internal/sandbox -update)\n%s", path, got)
 			}
 		})
+	}
+}
+
+// A restricted network is never the whole network: the plan shares
+// nothing, lists what the proxy will allow, and can't run until box can
+// enforce it.
+func TestRestrictedNetwork(t *testing.T) {
+	f := machine()
+	p := preset(t, "kiro-cli")
+	p.Network = profile.NetRestricted
+	p.Allow = profile.Allow{Groups: []string{"docs-microsoft"}}
+	in := input(t, f, p)
+	plan, err := Build(f, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(plan.Args(), "--share-net") {
+		t.Error("a restricted profile must not share the host's network")
+	}
+	if plan.Network != profile.NetRestricted || !errors.Is(plan.Runnable(), ErrNotEnforced) {
+		t.Errorf("network %q, runnable %v", plan.Network, plan.Runnable())
+	}
+	dry := plan.DryRun("bwrap")
+	for _, want := range []string{"# Network: restricted", "runtime.us-east-1.kiro.dev", "learn.microsoft.com", "network=restricted", "Not enforced yet"} {
+		if !strings.Contains(dry, want) {
+			t.Errorf("dry run lacks %q:\n%s", want, dry)
+		}
+	}
+	if strings.Contains(dry, "kubernetes.io") || strings.Contains(dry, "dev.azure.com") {
+		t.Error("an unticked group leaked into the allowlist")
+	}
+
+	// --net and --no-net replace the profile's mode for one run.
+	for _, on := range []bool{true, false} {
+		in.Network = &on
+		plan, err := Build(f, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[bool]profile.NetMode{true: profile.NetOn, false: profile.NetOff}[on]
+		if plan.Network != want || plan.Runnable() != nil || slices.Contains(plan.Args(), "--share-net") != on {
+			t.Errorf("override %v: network %q, args %v", on, plan.Network, plan.Flags)
+		}
+		if strings.Contains(plan.DryRun("bwrap"), "Network: restricted") {
+			t.Errorf("override %v still prints the allowlist", on)
+		}
 	}
 }
 

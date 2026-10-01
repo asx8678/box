@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/asx8678/box/internal/profile"
 )
 
 // Args is bwrap's argument list, without argv[0].
@@ -86,6 +88,17 @@ func (p *Plan) DryRun(bwrap string) string {
 	}
 	if p.Landlock {
 		b.WriteString("# box also applies a Landlock scope blocking abstract Unix sockets outside the box.\n")
+	}
+	if p.Network == profile.NetRestricted {
+		b.WriteString("# Network: restricted. The box has no network of its own; only these hosts are\n" +
+			"# reachable, through box's proxy:\n")
+		for _, set := range p.Allowed {
+			fmt.Fprintf(&b, "#   %s: %s\n", set.Name, strings.Join(set.Hosts, ", "))
+		}
+		if len(p.Allowed) == 0 {
+			b.WriteString("#   nothing: the profile allows no hosts\n")
+		}
+		b.WriteString("# Not enforced yet: the proxy isn't built, so box refuses to run this profile.\n")
 	}
 	return b.String()
 }

@@ -4,9 +4,12 @@ import (
 	"errors"
 	"image/color"
 	"os"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -82,7 +85,7 @@ func TestEditorMouse(t *testing.T) {
 		t.Fatalf("not saved: %q", e.msg)
 	}
 	p := e.result.Profile
-	if !p.Network || p.Workdir.Mode != "ro" {
+	if p.Network != profile.NetOn || p.Workdir.Mode != "ro" {
 		t.Errorf("switches: %+v", p)
 	}
 	if !slices.Equal(p.Home.RW, []string{"~/.tool", "~/.cache/tool"}) || len(p.Home.RO) != 0 {
@@ -108,11 +111,11 @@ func TestEditorKeyboardFocusOrder(t *testing.T) {
 		e.Update(press(tea.KeyTab))
 	}
 	e.Update(press(tea.KeySpace))
-	if !e.p.Network {
+	if e.p.Network != profile.NetOn {
 		t.Error("space didn't switch network on")
 	}
 	e.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	if e.focus != "net:off" {
+	if e.focus != "net:restricted" {
 		t.Errorf("shift+tab went to %s", e.focus)
 	}
 }
@@ -400,5 +403,168 @@ func TestConfirmButtons(t *testing.T) {
 	m.Update(press(tea.KeyEnter))
 	if !m.yes {
 		t.Error("→ then enter should press Yes")
+	}
+}
+
+// plain removes the colour codes from drawn text.
+func plain(s string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;:]*[A-Za-z]`).ReplaceAllString(s, "")
+}
+
+func kiroEditor(t *testing.T, w, h int) *editor {
+	p, err := profile.Preset("kiro-cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEditor(Options{
+		Profile:   p,
+		Name:      "default",
+		New:       true,
+		Home:      "/home/u",
+		Suggested: []string{"~/.cache/kiro-cli", "~/.config/kiro"},
+		Exists:    func(string) bool { return false },
+		CheckPath: func(string, bool, bool) error { return nil },
+		Plan:      func(profile.Profile, string) (string, error) { return "bwrap ...", nil },
+	})
+	e.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	return e
+}
+
+func TestEditorRestrictedNetwork(t *testing.T) {
+	e := kiroEditor(t, 100, 50)
+	clickOn(t, e, e.hitsFn(), "net:restricted")
+	if e.p.Network != profile.NetRestricted {
+		t.Fatalf("network %q", e.p.Network)
+	}
+	for _, id := range []string{"own", "gall", "add:host"} {
+		if !slices.Contains(e.ids(), id) {
+			t.Errorf("no %s in the focus order: %v", id, e.ids())
+		}
+	}
+	// The program's own servers can't be unticked.
+	clickOn(t, e, e.hitsFn(), "own")
+	if !strings.Contains(e.note, "always allowed") || !strings.Contains(e.describe("own"), "runtime.us-east-1.kiro.dev") {
+		t.Errorf("own servers: note %q, help %q", e.note, e.describe("own"))
+	}
+	aws := slices.IndexFunc(e.groups, func(g groupItem) bool { return g.ID == "aws" })
+	clickOn(t, e, e.hitsFn(), "g:"+strconv.Itoa(aws))
+	if !strings.Contains(e.describe("g:"+strconv.Itoa(aws)), "every AWS account") {
+		t.Errorf("the AWS group must say what it reaches: %q", e.describe("g:"+strconv.Itoa(aws)))
+	}
+	clickOn(t, e, e.hitsFn(), "gall") // one click: all official documentation
+	if !e.allDocs() {
+		t.Error("All didn't tick every documentation group")
+	}
+
+	clickOn(t, e, e.hitsFn(), "add:host")
+	typeText(e, "*.com")
+	e.Update(press(tea.KeyEnter))
+	if e.inputKind != "host" || e.inputErr == "" {
+		t.Fatalf("*.com must be refused: kind %q, err %q", e.inputKind, e.inputErr)
+	}
+	e.input.SetValue("https://Wiki.Example.com/page")
+	e.Update(press(tea.KeyEnter))
+	e.Update(press(tea.KeyEnter)) // on "+ Add host" again
+	e.input.SetValue("old.example.com")
+	e.Update(press(tea.KeyEnter))
+	if !slices.Equal(e.hosts, []string{"wiki.example.com", "old.example.com"}) {
+		t.Fatalf("hosts %v, input error %q", e.hosts, e.inputErr)
+	}
+	clickOn(t, e, e.hitsFn(), "h:1:rm")
+	// Custom takes IP addresses too, and refuses what isn't one.
+	for in, want := range map[string]string{
+		"10.0.0.5:8443":          "10.0.0.5:8443",
+		"http://[2001:DB8::1]/x": "2001:db8::1",
+		"999.1.1.1":              "",
+		"10.0.0.0/24":            "",
+	} {
+		e.Update(press(tea.KeyEnter))
+		e.input.SetValue(in)
+		e.Update(press(tea.KeyEnter))
+		if added := e.inputKind == ""; added != (want != "") || (added && e.hosts[len(e.hosts)-1] != want) {
+			t.Errorf("custom %q: added %v, hosts %v, error %q", in, added, e.hosts, e.inputErr)
+		}
+		e.Update(press(tea.KeyEscape))
+		e.setFocus("add:host")
+	}
+	e.hosts = e.hosts[:1]
+
+	clickOn(t, e, e.hitsFn(), "save")
+	if e.result == nil {
+		t.Fatalf("not saved: %q", e.msg)
+	}
+	p := e.result.Profile
+	want := []string{"docs-microsoft", "docs-kubernetes", "docs-aws", "docs-languages", "docs-tools", "aws"}
+	if p.Network != profile.NetRestricted || !slices.Equal(p.Allow.Groups, want) || !slices.Equal(p.Allow.Hosts, []string{"wiki.example.com"}) {
+		t.Errorf("saved network %q, allow %+v", p.Network, p.Allow)
+	}
+	if err := p.Validate("kiro-cli"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRestrictedKeepsChoicesAndWarnsUnknownPrograms(t *testing.T) {
+	e := newTestEditor(t) // "tool": box has no servers listed for it
+	e.activate("net:restricted")
+	if slices.Contains(e.ids(), "own") || !strings.Contains(plain(e.View().Content), "no list of servers") {
+		t.Error("an unknown program must be told it gets no network of its own")
+	}
+	e.activate("gall")
+	e.activate("net:on")
+	if slices.Contains(e.ids(), "gall") {
+		t.Error("the allowlist shows only for a restricted network")
+	}
+	if p := e.build(); p.Network != profile.NetOn || len(p.Allow.Groups) == 0 {
+		t.Errorf("switching away must keep the choices: %q %+v", p.Network, p.Allow)
+	}
+}
+
+// An input opened low on a short terminal scrolls into view with the lines
+// under it; it used to open below the footer.
+func TestInputStaysInView(t *testing.T) {
+	for _, kind := range []string{"folder", "host"} {
+		e := kiroEditor(t, 80, 24)
+		e.activate("net:restricted")
+		e.View()
+		for e.focus != "add:"+kind {
+			e.Update(press(tea.KeyTab))
+			e.View()
+		}
+		e.Update(press(tea.KeyEnter))
+		out := e.View().Content
+		if !strings.Contains(out, "╭") || !strings.Contains(out, "esc closes") {
+			t.Errorf("%s input isn't fully on screen:\n%s", kind, out)
+		}
+	}
+}
+
+func TestTinyTerminalDoesNotCrash(t *testing.T) {
+	for h := 0; h < 12; h++ {
+		e := kiroEditor(t, 80, h)
+		e.View()
+		e.activate("net:restricted")
+		e.openInput("host")
+		e.View()
+		e.closeInput()
+		e.openPreview()
+		e.View()
+	}
+	e := kiroEditor(t, 5, 5)
+	e.View()
+}
+
+func TestLaunching(t *testing.T) {
+	var quick, held strings.Builder
+	Launching(&quick, "kiro-cli", "kiro-cli · profile default · network on · project read-write", 0)
+	if got := quick.String(); got != " ✻ box  kiro-cli · profile default · network on · project read-write\n" {
+		t.Errorf("a plain run prints one line, without colour codes off a terminal: %q", got)
+	}
+	Launching(&held, "kiro-cli", "summary", time.Nanosecond)
+	want := " ✻ box  summary\n        launching kiro-cli in the sandbox" + strings.Repeat(" ·", LaunchSteps) + "\n"
+	if held.String() != want {
+		t.Errorf("after the editor: %q, want %q", held.String(), want)
+	}
+	if total := LaunchSteps * LaunchStep; total < time.Second || total > 3*time.Second {
+		t.Errorf("the hold is %v; it should be a moment, not a wait", total)
 	}
 }

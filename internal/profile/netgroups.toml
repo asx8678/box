@@ -1,0 +1,136 @@
+# Hosts for profiles with network = "restricted", in named groups. Data only:
+# box's code never names a host. Every list comes from the vendor's own
+# published firewall list, checked on 2026-10-01; the source is next to each.
+#
+# kind = "program": the program's own servers, where it signs in and where
+#   its model runs. Every restricted profile of that program allows them, so
+#   restricting the network can't lock the program out. Telemetry and update
+#   hosts are left out: the program works without them, and can't update
+#   itself inside box anyway, because its folders are read-only.
+# kind = "docs": official documentation, run by the project itself and
+#   read-only for visitors. Exact hosts only, never a wildcard, so nobody
+#   else's subdomain comes along.
+# kind = "service": a service the program may use. A note says when the
+#   hosts also reach other people's accounts: a host name can't tell your
+#   account from someone else's.
+#
+# Entries are "host" or "*.suffix" (every name below suffix), optionally
+# with ":port".
+
+# https://code.claude.com/docs/en/network-config#network-access-requirements
+[[group]]
+id = "claude"
+label = "Claude Code"
+kind = "program"
+programs = ["claude"]
+hosts = [
+  "api.anthropic.com",   # model requests
+  "platform.claude.com", # sign-in tokens: exchange and refresh
+  "claude.ai",           # signing in with a claude.ai account
+  "claude.com",          # sign-in redirect
+]
+
+# https://kiro.dev/docs/privacy-and-security/firewalls/ (the Kiro CLI table).
+# Both regions a Kiro profile can be in are listed. A company signing in
+# through IAM Identity Center also needs its own hosts, which contain its
+# directory and region: add them to the profile under allow.hosts.
+[[group]]
+id = "kiro"
+label = "Kiro"
+kind = "program"
+programs = ["kiro-cli", "kirocrew"]
+hosts = [
+  "app.kiro.dev",                             # sign-in portal
+  "assets.app.kiro.dev",
+  "prod.us-east-1.auth.desktop.kiro.dev",     # token exchange and refresh
+  "runtime.us-east-1.kiro.dev",               # the Kiro service
+  "runtime.eu-central-1.kiro.dev",
+  "management.us-east-1.kiro.dev",            # configuration and access
+  "management.eu-central-1.kiro.dev",
+  "q.us-east-1.amazonaws.com",                # the Kiro service, older endpoint, still required
+  "q.eu-central-1.amazonaws.com",
+  "cognito-identity.us-east-1.amazonaws.com", # signing in with Google or GitHub
+]
+
+[[group]]
+id = "docs-microsoft"
+label = "Microsoft"
+kind = "docs"
+hosts = ["learn.microsoft.com"] # Azure, .NET, PowerShell, Windows, Azure DevOps
+
+[[group]]
+id = "docs-kubernetes"
+label = "Kubernetes"
+kind = "docs"
+hosts = ["kubernetes.io"]
+
+[[group]]
+id = "docs-aws"
+label = "AWS"
+kind = "docs"
+hosts = ["docs.aws.amazon.com"]
+
+[[group]]
+id = "docs-languages"
+label = "Languages"
+kind = "docs"
+hosts = [
+  "docs.python.org",
+  "go.dev",
+  "pkg.go.dev",
+  "doc.rust-lang.org",
+  "docs.rs",
+  "developer.mozilla.org", # JavaScript, HTML, CSS
+  "nodejs.org",
+  "www.typescriptlang.org",
+  "docs.oracle.com",       # Java
+  "en.cppreference.com",
+]
+
+[[group]]
+id = "docs-tools"
+label = "Dev tools"
+kind = "docs"
+hosts = [
+  "docs.docker.com",
+  "developer.hashicorp.com", # Terraform
+  "helm.sh",
+  "git-scm.com",
+  "docs.github.com",
+  "man7.org",                # Linux man pages
+]
+
+# https://docs.aws.amazon.com/general/latest/gr/rande.html: service
+# endpoints are <service>.<region>.amazonaws.com, which also covers signing
+# in from the CLI (oidc.<region> and portal.sso.<region>).
+[[group]]
+id = "aws"
+label = "AWS"
+kind = "service"
+note = "Reaches every AWS account and S3 bucket, not only yours. Tighter: leave it off and add the hosts you use."
+hosts = ["*.amazonaws.com"]
+
+# https://learn.microsoft.com/azure/devops/organizations/security/allow-list-ip-url
+[[group]]
+id = "azure-devops"
+label = "Azure DevOps"
+kind = "service"
+note = "Repos, boards, pipelines and sign-in. Reaches every Azure DevOps organization, not only yours."
+hosts = [
+  "dev.azure.com",
+  "*.dev.azure.com",
+  "*.visualstudio.com",        # sign-in and licensing, and organizations on the older URL
+  "login.microsoftonline.com", # Microsoft Entra sign-in
+]
+
+# The same page, under Azure Artifacts.
+[[group]]
+id = "azure-artifacts"
+label = "Azure Artifacts"
+kind = "service"
+note = "Package feeds; tick Azure DevOps too. Reaches every Azure storage account, not only yours."
+hosts = [
+  "*.blob.core.windows.net",
+  "*.vsassets.io",
+  "*.dedup.microsoft.com",
+]

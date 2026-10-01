@@ -74,6 +74,12 @@ type envItem struct {
 	on   bool
 }
 
+// groupItem is one of box's network groups and whether the profile allows it.
+type groupItem struct {
+	profile.NetGroup
+	on bool
+}
+
 type editor struct {
 	page
 	opts     Options
@@ -81,6 +87,9 @@ type editor struct {
 	baseline profile.Profile // what the screen started with, for "unsaved changes"
 	items    []item
 	env      []envItem
+	groups   []groupItem // for a restricted network
+	hosts    []string    // custom allowed hosts and IP addresses
+	own      []string    // the program's own servers: always allowed
 	focus    string
 
 	name      textinput.Model
@@ -126,6 +135,11 @@ func newEditor(opts Options) *editor {
 			e.env = append(e.env, envItem{name: name})
 		}
 	}
+	for _, g := range profile.NetGroups() {
+		e.groups = append(e.groups, groupItem{g, slices.Contains(opts.Profile.Allow.Groups, g.ID)})
+	}
+	e.hosts = slices.Clone(opts.Profile.Allow.Hosts)
+	e.own = profile.OwnHosts(opts.Profile.Program)
 	e.name = textinput.New()
 	e.name.Prompt = ""
 	e.name.CharLimit = 64
@@ -167,7 +181,19 @@ func (e *editor) build() profile.Profile {
 			p.Env.Pass = append(p.Env.Pass, v.name)
 		}
 	}
+	// Kept whatever the network mode, so switching back loses nothing.
+	p.Allow = profile.Allow{Hosts: append([]string(nil), e.hosts...)}
+	for _, g := range e.groups {
+		if g.on {
+			p.Allow.Groups = append(p.Allow.Groups, g.ID)
+		}
+	}
 	return p
+}
+
+// allDocs reports whether every documentation group is ticked.
+func (e *editor) allDocs() bool {
+	return !slices.ContainsFunc(e.groups, func(g groupItem) bool { return g.Kind == "docs" && !g.on })
 }
 
 // dirty reports unsaved changes.
@@ -177,7 +203,24 @@ func (e *editor) dirty() bool {
 
 // ids is the keyboard focus order: the widgets in the order they're drawn.
 func (e *editor) ids() []string {
-	ids := []string{"wd:rw", "wd:ro", "net:off", "net:on"}
+	ids := []string{"wd:rw", "wd:ro", "net:off", "net:restricted", "net:on"}
+	if e.p.Network == profile.NetRestricted {
+		if len(e.own) > 0 {
+			ids = append(ids, "own")
+		}
+		ids = append(ids, "gall")
+		for _, kind := range []string{"docs", "service"} {
+			for i, g := range e.groups {
+				if g.Kind == kind {
+					ids = append(ids, fmt.Sprintf("g:%d", i))
+				}
+			}
+		}
+		for i := range e.hosts {
+			ids = append(ids, fmt.Sprintf("h:%d:rm", i))
+		}
+		ids = append(ids, "add:host")
+	}
 	for pass := 0; pass < 2; pass++ {
 		for i, it := range e.items {
 			if it.extra != (pass == 1) {
@@ -245,7 +288,26 @@ func (e *editor) activate(id string) tea.Cmd {
 	case "wd":
 		e.p.Workdir.Mode = action
 	case "net":
-		e.p.Network = action == "on"
+		e.p.Network = profile.NetMode(action)
+	case "own":
+		e.setNote(false, "%s's own servers are always allowed, so a restricted network can't lock it out.", e.opts.Profile.Program)
+	case "gall":
+		on := !e.allDocs()
+		for i := range e.groups {
+			if e.groups[i].Kind == "docs" {
+				e.groups[i].on = on
+			}
+		}
+	case "g":
+		if i < len(e.groups) {
+			e.groups[i].on = !e.groups[i].on
+		}
+	case "h":
+		if i < len(e.hosts) {
+			e.setNote(false, "Removed %s", e.hosts[i])
+			e.hosts = slices.Delete(e.hosts, i, i+1)
+			e.focus = "add:host"
+		}
 	case "f":
 		if i >= len(e.items) {
 			return nil
@@ -340,12 +402,15 @@ func (e *editor) openInput(kind string) tea.Cmd {
 	e.inputErr = ""
 	e.input.SetValue("")
 	e.input.SetSuggestions(nil)
-	if kind == "folder" {
+	switch kind {
+	case "folder":
 		e.input.Placeholder = "~/path/to/folder"
 		e.input.SetValue("~/")
 		e.input.CursorEnd()
 		e.refreshInput()
-	} else {
+	case "host":
+		e.input.Placeholder = "docs.example.com, *.example.com or 10.0.0.5"
+	default:
 		e.input.Placeholder = "VARIABLE_NAME"
 	}
 	e.input.SetWidth(layoutWidth(e.width) - 16)
@@ -389,6 +454,18 @@ func (e *editor) submitInput() tea.Cmd {
 		}
 		e.items = append(e.items, item{path: path, on: true, extra: true})
 		e.setNote(false, "Added %s, read-only. Click read-only to make it writable.", path)
+	case "host":
+		host := cleanHost(e.input.Value())
+		if err := profile.CheckHost(host); err != nil {
+			e.inputErr = err.Error()
+			return nil
+		}
+		if slices.Contains(e.hosts, host) {
+			e.inputErr = host + " is already listed"
+			return nil
+		}
+		e.hosts = append(e.hosts, host)
+		e.setNote(false, "Added %s to the allowed network.", host)
 	case "env":
 		name := strings.TrimSpace(e.input.Value())
 		if err := profile.CheckEnvName(name); err != nil {
@@ -570,17 +647,20 @@ func (e *editor) View() tea.View {
 	if e.preview {
 		all = e.previewLines(w)
 	} else {
-		body, focusLine := e.body(w)
+		body, first, last := e.body(w)
 		footer := e.footer(w)
-		avail := e.height - len(footer)
+		avail := max(0, e.height-len(footer)) // none on a terminal shorter than the footer
 		if e.height <= 0 || len(body) <= avail {
 			e.top = 0
 		} else {
-			if e.focus != e.lastFocus && focusLine >= 0 {
-				if focusLine < e.top {
-					e.top = focusLine
-				} else if focusLine >= e.top+avail {
-					e.top = focusLine - avail + 1
+			// The focused widget scrolls into view when the focus moves; an
+			// open input stays in view with its completions and error.
+			if first >= 0 && (e.focus != e.lastFocus || e.inputKind != "") {
+				if last >= e.top+avail {
+					e.top = last - avail + 1
+				}
+				if first < e.top {
+					e.top = first
 				}
 			}
 			e.top = max(0, min(e.top, len(body)-avail))
@@ -615,12 +695,18 @@ func ruleNote(w int, note string) line {
 	return line{styled(styleFaint, " "+strings.Repeat("─", max(1, n))+" "), styled(styleDim, note), styled(styleFaint, " ──")}
 }
 
-// body lays out everything above the footer and says which line holds the
-// focus (-1 if the focus is in the footer).
-func (e *editor) body(w int) ([]line, int) {
+// body lays out everything above the footer and says which lines hold the
+// focus: the focused widget's, or the open input's whole block (-1 if the
+// focus is in the footer).
+func (e *editor) body(w int) (ls []line, first, last int) {
 	inner := w - 6 // after the gutter
-	var ls []line
 	blank := func() { ls = append(ls, line{}) }
+	inFirst, inLast := -1, -1
+	input := func(keys string) {
+		inFirst = len(ls)
+		ls = append(ls, e.inputBox(keys, w)...)
+		inLast = len(ls) - 1
+	}
 
 	title := styleBold.Render(e.opts.Profile.Program) + styleDim.Render(" › ") + strings.TrimSpace(e.name.Value())
 	switch {
@@ -629,7 +715,14 @@ func (e *editor) body(w int) ([]line, int) {
 	case e.dirty():
 		title += styleAccent.Render("  ● edited")
 	}
-	sub := line(chip(e.p.Network, "network on", "network off", styleWarn))
+	net := e.p.Network
+	sub := line{styled(styleDim, "○ network off")}
+	switch net {
+	case profile.NetOn:
+		sub = line{styled(styleWarn, "● network on")}
+	case profile.NetRestricted:
+		sub = line{styled(styleOK, "◐ network restricted")}
+	}
 	sub = append(sub, txt("   "))
 	sub = append(sub, chip(e.p.Workdir.Mode == "rw", "project read-write", "project read-only", styleRW)...)
 	sub = append(sub, txt("   "), styled(styleDim, e.opts.Workdir))
@@ -643,12 +736,25 @@ func (e *editor) body(w int) ([]line, int) {
 		line{gutter(), label("Project folder"),
 			e.segment("wd:rw", "read-write", rw), e.segment("wd:ro", "read-only", !rw)},
 		line{gutter(), label("Network"),
-			e.segment("net:off", "off", !e.p.Network), e.segment("net:on", "on", e.p.Network)})
-	if e.p.Network {
+			e.segment("net:off", "off", net == profile.NetOff),
+			e.segment("net:restricted", "restricted", net == profile.NetRestricted),
+			e.segment("net:on", "on", net == profile.NetOn)})
+	switch net {
+	case profile.NetOn:
 		ls = append(ls, indent(wrap("⚠ reaches the internet, your LAN, the Windows host on WSL and local services",
+			styleWarn, inner), 4)...)
+	case profile.NetRestricted:
+		ls = append(ls, indent(wrap("⚠ not enforced yet: saved, but box won't run it until its proxy is built",
 			styleWarn, inner), 4)...)
 	}
 	blank()
+	if net == profile.NetRestricted {
+		ls = append(ls, e.allowed(inner)...)
+		if e.inputKind == "host" {
+			input("enter adds · esc closes")
+		}
+		blank()
+	}
 
 	// Folders: one row each; the access pill lines up on the right.
 	folder := func(i int, it item) line {
@@ -688,7 +794,7 @@ func (e *editor) body(w int) ([]line, int) {
 	}
 	ls = append(ls, line{gutter(), e.button("add:folder", "+ Add folder", secondary)})
 	if e.inputKind == "folder" {
-		ls = append(ls, e.inputBox("tab completes · ↑↓ choose · enter adds · esc closes", w)...)
+		input("tab completes · ↑↓ choose · enter adds · esc closes")
 	}
 	blank()
 
@@ -703,7 +809,7 @@ func (e *editor) body(w int) ([]line, int) {
 		ls = append(ls, append(line{gutter()}, l...))
 	}
 	if e.inputKind == "env" {
-		ls = append(ls, e.inputBox("enter adds · esc closes", w)...)
+		input("enter adds · esc closes")
 	}
 	blank()
 
@@ -717,15 +823,71 @@ func (e *editor) body(w int) ([]line, int) {
 		min(w-2, 46), border), 1)...)
 	pointAt(ls, e.focus)
 
-	focusLine := -1
+	first, last = -1, -1
 	for y, l := range ls {
-		for _, s := range l {
-			if (s.id != "" && s.id == e.focus) || (s.id == "input" && e.inputKind != "") {
-				focusLine = y
+		if slices.ContainsFunc(l, func(s seg) bool { return s.id != "" && s.id == e.focus }) {
+			if first < 0 {
+				first = y
 			}
+			last = y
 		}
 	}
-	return ls, focusLine
+	switch {
+	case e.inputKind != "":
+		first, last = inFirst, inLast
+	case e.focus == "name":
+		first, last = first-1, last+1 // the whole box, with its frame
+	}
+	return ls, first, last
+}
+
+// allowed lays out what a restricted network may reach: the program's own
+// servers, which can't be unticked, then box's groups, then the custom
+// hosts and addresses, which can be added whatever else is ticked.
+func (e *editor) allowed(inner int) []line {
+	prog := e.opts.Profile.Program
+	ls := []line{section("Allowed network", "everything else is blocked")}
+	if len(e.own) > 0 {
+		row := append(line{gutter()}, e.checkbox("own", true, prog+"'s own servers")...)
+		ls = append(ls, append(row, styled(styleFaint, "   always allowed")))
+	} else {
+		ls = append(ls, indent(wrap("⚠ box has no list of servers for "+prog+
+			": add the hosts it needs under Custom, or it gets no network", styleWarn, inner), 4)...)
+	}
+	rows := func(label string, groups [][]seg) {
+		for i, l := range flow(groups, inner-17) {
+			if i > 0 {
+				label = ""
+			}
+			ls = append(ls, append(line{gutter(), styled(styleDim, pad(label, 17))}, l...))
+		}
+	}
+	for _, kind := range [][2]string{{"docs", "Documentation"}, {"service", "Services"}} {
+		var groups [][]seg
+		if kind[0] == "docs" {
+			groups = append(groups, append(e.checkbox("gall", e.allDocs(), "All"), txt("   ")))
+		}
+		for i, g := range e.groups {
+			if g.Kind == kind[0] {
+				groups = append(groups, append(e.checkbox(fmt.Sprintf("g:%d", i), g.on, g.Label), txt("   ")))
+			}
+		}
+		rows(kind[1], groups)
+	}
+	var groups [][]seg
+	for i, h := range e.hosts {
+		groups = append(groups, []seg{txt(h + " "), e.button(fmt.Sprintf("h:%d:rm", i), "✕", secondary), txt("   ")})
+	}
+	rows("Custom", append(groups, []seg{e.button("add:host", "+ Add custom", secondary)}))
+	return ls
+}
+
+// hostList names up to four hosts and counts the rest.
+func hostList(hosts []string) string {
+	if len(hosts) > 4 {
+		return fmt.Sprintf("%s and %d more", strings.Join(hosts[:4], ", "), len(hosts)-4)
+	}
+	return strings.Join(hosts, ", ")
 }
 
 // footer is the part that stays on screen: a separator, a help line about
@@ -782,10 +944,29 @@ func (e *editor) describe(id string) string {
 		}
 		return "The program can read this project but not change anything in it."
 	case "net":
-		if action == "on" {
+		switch action {
+		case "on":
 			return "Full network access: the internet, your LAN, the Windows host on WSL and local services."
+		case "restricted":
+			only := "Only " + prog + "'s own servers and what you tick below"
+			if len(e.own) == 0 {
+				only = "Only what you tick below"
+			}
+			return only + ", plus what you add under Custom, can be reached. Everything else stays blocked."
 		}
 		return "No network: only a loopback interface inside the box. Safest when the program works offline."
+	case "own":
+		return "Where " + prog + " signs in and runs its model: " + hostList(e.own) + "."
+	case "gall":
+		return "Tick every official documentation site box knows. They are run by the projects themselves and are read-only."
+	case "g":
+		if i < len(e.groups) {
+			return strings.TrimSpace("Allows " + hostList(e.groups[i].Hosts) + ". " + e.groups[i].Note)
+		}
+	case "h":
+		if i < len(e.hosts) {
+			return "Remove " + e.hosts[i] + " from the allowed network."
+		}
 	case "f":
 		if i >= len(e.items) {
 			return ""
@@ -807,8 +988,11 @@ func (e *editor) describe(id string) string {
 			return "Copy " + e.env[i].name + " from your environment into the box when it starts. The value is never saved."
 		}
 	case "add":
-		if action == "folder" {
+		switch action {
+		case "folder":
 			return "Add a folder that already exists on this machine. Tab completes the path."
+		case "host":
+			return "Allow a domain or IP address of your own: docs.example.com, *.example.com for all below it, or 10.0.0.5. Add :port for one port."
 		}
 		return "Pass another environment variable by name."
 	case "name":

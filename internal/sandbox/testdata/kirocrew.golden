@@ -53,7 +53,7 @@ env -i \
   -- /home/u/.local/bin/kiro-cli chat 'it'\''s a test' \
   3<<<'program=kirocrew
 profile=default
-network=true
+network=on
 workdir=/home/u/code/proj'
 # fd 4: box's seccomp filter, blocking VM sockets to the Windows host (AF_VSOCK); box passes it at run time,
 # so pasting this command needs that fd or the --seccomp line removed.

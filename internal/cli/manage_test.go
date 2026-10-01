@@ -17,7 +17,7 @@ func tempDirs(t *testing.T) profile.Dirs {
 
 func TestSummary(t *testing.T) {
 	p := profile.Default("kiro-cli")
-	p.Network = true
+	p.Network = profile.NetOn
 	p.Home.RW = []string{"~/.local/share/kiro-cli"}
 	p.Home.RO = []string{"~/.kiro"}
 	p.Tools = []string{"node"}
@@ -27,6 +27,29 @@ func TestSummary(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary %q lacks %q", got, want)
 		}
+	}
+}
+
+func TestLaunchSummary(t *testing.T) {
+	p := profile.Default("kiro-cli")
+	if got := launchSummary("kiro-cli", "default", p, profile.NetOn); got != "kiro-cli · profile default · network on · project read-write" {
+		t.Errorf("%q", got)
+	}
+	p.Workdir.Mode = "ro"
+	if got := launchSummary("sh", "offline", p, profile.NetOff); got != "sh · profile offline · network off · project read-only" {
+		t.Errorf("%q", got)
+	}
+}
+
+func TestSummaryRestricted(t *testing.T) {
+	p := profile.Default("kiro-cli")
+	p.Network = profile.NetRestricted
+	if got := summary(p, 0); !strings.HasPrefix(got, "net restricted · ") {
+		t.Errorf("summary %q", got)
+	}
+	p.Allow = profile.Allow{Groups: []string{"docs-microsoft", "aws"}, Hosts: []string{"wiki.example.com"}}
+	if got := summary(p, 0); !strings.Contains(got, "net restricted (docs-microsoft, aws, 1 custom)") {
+		t.Errorf("summary %q", got)
 	}
 }
 

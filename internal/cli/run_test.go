@@ -105,6 +105,27 @@ func TestDryRunEndToEnd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".config/box/profiles/sh/default.toml")); err == nil {
 		t.Error("--dry-run saved a profile")
 	}
+	// A restricted profile can be previewed, with its allowlist and without
+	// the host's network, but never runs: box can't enforce it yet.
+	restricted := filepath.Join(home, ".config/box/profiles/sh/web.toml")
+	os.MkdirAll(filepath.Dir(restricted), 0o700)
+	os.WriteFile(restricted, []byte("version = 1\nprogram = \"sh\"\nnetwork = \"restricted\"\n"+
+		"[workdir]\nmode = \"rw\"\n[allow]\ngroups = [\"docs-microsoft\"]\nhosts = [\"wiki.example.com\"]\n"), 0o600)
+	out, code = boxRun("--dry-run", "--no-tui", "-p", "web", "sh")
+	if code != 0 || strings.Contains(out, "--share-net") {
+		t.Fatalf("restricted dry run: exit %d\n%s", code, out)
+	}
+	for _, want := range []string{"# Network: restricted", "learn.microsoft.com", "wiki.example.com"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("restricted dry run lacks %q:\n%s", want, out)
+		}
+	}
+	if out, code = boxRun("--no-tui", "-p", "web", "sh", "-c", "true"); code != ExitBox {
+		t.Errorf("a restricted profile must not run: exit %d\n%s", code, out)
+	}
+	if out, code = boxRun("-l"); code != 0 || !strings.Contains(out, "net restricted (docs-microsoft, 1 custom)") {
+		t.Errorf("list: exit %d\n%s", code, out)
+	}
 	if _, code = boxRun("--dry-run", "no-such-program"); code != 127 {
 		t.Errorf("missing program: exit %d, want 127", code)
 	}

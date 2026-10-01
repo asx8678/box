@@ -90,6 +90,11 @@ type Plan struct {
 	NewSession bool
 	// Landlock asks exec to block abstract Unix sockets outside the box.
 	Landlock bool
+	// Network is what the sandbox gets, after --net or --no-net. When it
+	// is restricted the sandbox has no network of its own, and Allowed
+	// lists what box's proxy lets through.
+	Network profile.NetMode
+	Allowed []profile.AllowSet
 	// FlushInput asks exec to discard pending terminal input, such as
 	// replies to the TUI's capability queries.
 	FlushInput bool
@@ -217,8 +222,11 @@ func Build(h host.Host, in Input) (*Plan, error) {
 	}
 
 	network := p.Network
-	if in.Network != nil {
-		network = *in.Network
+	if in.Network != nil { // --net or --no-net, for this run
+		network = profile.NetOff
+		if *in.Network {
+			network = profile.NetOn
+		}
 	}
 	plan := &Plan{
 		Mounts:   b.mounts,
@@ -226,22 +234,41 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		Command:  command,
 		InfoFD:   DryRunInfoFD,
 		Create:   b.create,
-		Landlock: p.Sandbox.Landlock && network,
+		Landlock: p.Sandbox.Landlock && network == profile.NetOn,
+		Network:  network,
 	}
-	plan.flags(in, network)
+	if network == profile.NetRestricted {
+		plan.Allowed = p.Allowed()
+	}
+	plan.flags(in, network == profile.NetOn)
 	plan.Env = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), in.ProgramEnv)
-	plan.Info = fmt.Appendf(nil, "program=%s\nprofile=%s\nnetwork=%t\nworkdir=%s\n",
+	plan.Info = fmt.Appendf(nil, "program=%s\nprofile=%s\nnetwork=%s\nworkdir=%s\n",
 		p.Program, in.ProfileName, network, wd)
 	return plan, nil
 }
 
-// flags sets bwrap's namespace and process options. Terminal injection is
-// blocked by the kernel, or else by the seccomp filter, or as a last resort
-// by detaching from the terminal; on WSL the filter also closes the VM's
-// sockets to the Windows host.
-func (plan *Plan) flags(in Input, network bool) {
+// ErrNotEnforced is why a restricted plan can't run yet.
+var ErrNotEnforced = errors.New("the profile restricts the network to the hosts it allows, and box can't enforce that yet: " +
+	"its proxy isn't built, and box won't open the whole network in its place")
+
+// Runnable reports whether box can enforce everything the plan promises.
+// A restricted network needs box's proxy; until it exists the plan can be
+// previewed and saved, but not run.
+func (p *Plan) Runnable() error {
+	if p.Network == profile.NetRestricted {
+		return ErrNotEnforced
+	}
+	return nil
+}
+
+// flags sets bwrap's namespace and process options; shareNet gives the
+// sandbox the host's network. Terminal injection is blocked by the kernel,
+// or else by the seccomp filter, or as a last resort by detaching from the
+// terminal; on WSL the filter also closes the VM's sockets to the Windows
+// host.
+func (plan *Plan) flags(in Input, shareNet bool) {
 	plan.Flags = []string{"--unshare-all"}
-	if network {
+	if shareNet {
 		plan.Flags = append(plan.Flags, "--share-net")
 	}
 	plan.Flags = append(plan.Flags, "--die-with-parent")

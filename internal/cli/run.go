@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/asx8678/box/internal/host"
 	"github.com/asx8678/box/internal/profile"
@@ -232,6 +233,9 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 		fmt.Fprint(stdout, plan.DryRun(r.bwrap))
 		return 0, nil
 	}
+	if err := plan.Runnable(); err != nil {
+		return ExitBox, fmt.Errorf("%w\n     nothing ran; until then use --net (whole network) or --no-net (none) for one run, or -e to change the profile", err)
+	}
 	if plan.NewSession {
 		fmt.Fprintln(stderr, "box: this kernel allows terminal injection, so the program runs detached "+
 			"from the terminal (no resize, no job control)")
@@ -243,7 +247,28 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	if err := folders.Save(); err != nil {
 		return ExitBox, err
 	}
+	// Say what starts and how, when a person is watching: on a terminal,
+	// unless --no-tui asked for quiet. After the editor or the picker the
+	// line is held for a moment, so the hand-over to the program is seen.
+	if f, ok := stderr.(*os.File); ok && isTerminal(f) && !o.noTUI {
+		step := time.Duration(0)
+		if sel.edit || sel.picked {
+			step = tui.LaunchStep
+		}
+		tui.Launching(stderr, r.prog.Name, launchSummary(r.prog.Name, name, p, plan.Network), step)
+	}
 	return ExitBox, sandbox.Exec(r.probe.Bwrap, plan)
+}
+
+// launchSummary is the launch line: the program, its profile, and the two
+// settings that matter most. net is the network this run really gets,
+// after --net or --no-net.
+func launchSummary(program, name string, p profile.Profile, net profile.NetMode) string {
+	project := "read-write"
+	if p.Workdir.Mode != "rw" {
+		project = "read-only"
+	}
+	return fmt.Sprintf("%s · profile %s · network %s · project %s", program, name, net, project)
 }
 
 // plan builds the sandbox for profile p. The program's folders are mounted

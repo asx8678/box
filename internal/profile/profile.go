@@ -21,20 +21,54 @@ const Version = 1
 // Profile is one program's sandbox settings, stored as
 // ~/.config/box/profiles/<program>/<name>.toml.
 type Profile struct {
-	Version int    `toml:"version"`
-	Program string `toml:"program"`
-	Network bool   `toml:"network"`
+	Version int     `toml:"version"`
+	Program string  `toml:"program"`
+	Network NetMode `toml:"network"`
 	// Tools are other commands the program runs (kiro-cli for Kiro Crew,
 	// node or uvx for MCP servers). Each is looked up on the host PATH like
 	// the program and its install folder mounted read-only; missing ones
 	// are skipped.
 	Tools   []string `toml:"tools"`
 	Workdir Workdir  `toml:"workdir"`
+	Allow   Allow    `toml:"allow"`
 	Home    Mounts   `toml:"home"`
 	Extra   Mounts   `toml:"extra"`
 	Env     Env      `toml:"env"`
 	System  System   `toml:"system"`
 	Sandbox Sandbox  `toml:"sandbox"`
+}
+
+// NetMode is how much of the network a program gets.
+type NetMode string
+
+const (
+	NetOff        NetMode = "off"        // only a loopback inside the box
+	NetRestricted NetMode = "restricted" // only the hosts the profile allows
+	NetOn         NetMode = "on"         // the whole network
+)
+
+// UnmarshalTOML also reads the true and false that profiles used before
+// "restricted" existed.
+func (m *NetMode) UnmarshalTOML(v any) error {
+	switch v := v.(type) {
+	case bool:
+		*m = NetOff
+		if v {
+			*m = NetOn
+		}
+	case string:
+		*m = NetMode(v)
+	default:
+		return fmt.Errorf("network must be \"off\", \"restricted\" or \"on\"")
+	}
+	return nil
+}
+
+// Allow is what a profile with network = "restricted" may reach, on top
+// of the program's own servers, which are always allowed (see OwnHosts).
+type Allow struct {
+	Groups []string `toml:"groups"` // names from box's list: documentation, services
+	Hosts  []string `toml:"hosts"`  // custom: "host", "*.suffix" or an IP address, optionally ":port"
 }
 
 // Workdir is how the folder box runs in is mounted.
@@ -78,6 +112,7 @@ func Default(program string) Profile {
 	return Profile{
 		Version: Version,
 		Program: program,
+		Network: NetOff,
 		Workdir: Workdir{Mode: "rw", ProtectGit: true},
 		Env:     Env{Set: map[string]string{}},
 	}

@@ -164,6 +164,24 @@ func TestNetworkSwitch(t *testing.T) {
 	}
 }
 
+// A restricted profile must never run with the whole network in place of
+// the allowlist box can't enforce yet; --net and --no-net still work.
+func TestRestrictedNetworkDoesNotRun(t *testing.T) {
+	e := setup(t)
+	p := profile.Default("sh")
+	p.Network = profile.NetRestricted
+	p.Allow = profile.Allow{Hosts: []string{"example.com"}}
+	e.profile(p)
+	out, stderr, code := e.run("--no-tui", "sh", "-c", "echo ran")
+	if code != 125 || strings.Contains(out, "ran") || !strings.Contains(stderr, "can't enforce") {
+		t.Errorf("exit %d\nstdout: %s\nstderr: %s", code, out, stderr)
+	}
+	off, _, code := e.run("--no-tui", "--no-net", "sh", "-c", "tail -n +3 /proc/net/dev")
+	if code != 0 || strings.Count(off, ":") != 1 {
+		t.Errorf("--no-net on a restricted profile: exit %d\n%s", code, off)
+	}
+}
+
 func TestArgumentsArriveIntact(t *testing.T) {
 	e := setup(t)
 	out := e.sh(`printf '%s|' "$@"`, "a b", "c'd", "", "$HOME")

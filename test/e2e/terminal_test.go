@@ -147,6 +147,30 @@ func TestResizeReachesTheProgram(t *testing.T) {
 	s.must("got-WINCH")
 }
 
+// On a terminal box says what it starts and how, before the program's own
+// output, and without holding a plain run up. Off a terminal it stays quiet.
+func TestLaunchLineComesFirst(t *testing.T) {
+	e := setup(t)
+	s := e.terminal("sh", "-c", "echo program-ran")
+	s.must("program-ran")
+	out := s.output()
+	line := "sh · profile default · network off · project read-write"
+	if i := strings.Index(out, line); i < 0 || i > strings.Index(out, "program-ran") {
+		t.Errorf("no launch line before the program's output:\n%s", out)
+	}
+	if strings.Contains(out, "launching") {
+		t.Errorf("a run without the editor must not pause:\n%s", out)
+	}
+	if _, stderr, _ := e.run("sh", "-c", "true"); strings.Contains(stderr, "profile default") {
+		t.Errorf("off a terminal box prints no launch line:\n%s", stderr)
+	}
+	s = e.terminal("--no-tui", "sh", "-c", "echo program-ran")
+	s.must("program-ran")
+	if strings.Contains(s.output(), "profile default") {
+		t.Errorf("--no-tui asks for quiet:\n%s", s.output())
+	}
+}
+
 func TestTerminalInjectionIsBlocked(t *testing.T) {
 	needPython(t)
 	e := setup(t)
@@ -242,7 +266,7 @@ except OSError as err:
 	for _, landlock := range []bool{false, true} {
 		e := setup(t)
 		p := profile.Default("python3")
-		p.Network = true
+		p.Network = profile.NetOn
 		p.Sandbox.Landlock = landlock
 		e.profile(p)
 		out, stderr, code := e.run("--no-tui", "python3", "-c", connect)

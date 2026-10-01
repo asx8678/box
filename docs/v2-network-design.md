@@ -22,23 +22,37 @@ Unix sockets in the VM. v1's only mitigations are "turn network off" and, on a
 these domains*, so the useful case (Kiro CLI reaching its API, `npm`/`uvx`
 reaching a registry) works without opening the LAN.
 
-## 2. Profile schema (additive)
+## 2. Profile schema (implemented)
+
+The schema, the editor and the dry run are on main. The proxy (sections 3 to 5)
+is not, so box previews and saves a restricted profile but refuses to run it.
 
 ```toml
-[network]
-mode = "allowlist"        # off | share (v1 behaviour) | allowlist
-allow = [
-  "api.kiro.dev",
-  "*.githubusercontent.com",
-  "registry.npmjs.org:443",
-]
+network = "restricted"    # "off" | "restricted" | "on"
+
+[allow]
+groups = ["docs-microsoft", "aws"]
+hosts  = ["wiki.mycompany.com", "*.internal.example.com", "registry.example.com:8443"]
 ```
 
-- `off` / `share` keep v1 semantics (`--unshare-all` alone / `+ --share-net`).
-- `allowlist` engages the proxy. `allow` entries are `host` or `host:port`; a
-  leading `*.` matches one or more leading labels. Default port set: 80, 443.
-- The old top-level `network = true/false` maps to `share`/`off` and is kept for
-  back-compat; `[network]` wins when present.
+- `off` / `on` keep v1 semantics (`--unshare-all` alone / `+ --share-net`).
+  The old `network = true/false` still loads, as `on`/`off`.
+- `restricted` engages the proxy. It always allows the **program's own
+  servers** (where it signs in and where its model runs), so restricting can't
+  lock the program out; then the listed groups; then `hosts`.
+- `groups` name lists that ship with box in
+  [`internal/profile/netgroups.toml`](../internal/profile/netgroups.toml):
+  official documentation (`docs-…`), services (`aws`, `azure-devops`,
+  `azure-artifacts`) and each program's own servers. They are data, taken from
+  the vendors' published firewall lists.
+- `hosts` are the profile's custom entries (the editor's "Custom" row, which is
+  there whatever else is ticked): a host name, `*.suffix`, or an IP address
+  (IPv4 or IPv6), each optionally with `:port` (`[2001:db8::1]:443` for IPv6).
+  A leading `*.` matches one or more leading labels and needs a suffix of two
+  labels or more. Ranges such as `10.0.0.0/24` aren't supported. Default port
+  set: 80, 443.
+- This differs from the first draft's `[network]` table: TOML can't hold both
+  `network = true` and `[network]`, and old profiles must keep loading.
 
 ## 3. Runtime shape
 
@@ -111,10 +125,12 @@ is fail-closed — the safe direction.
 
 ## 6. TUI
 
-The editor's Network section gains a third radio — `off · on (all) · allowlist`
-— and, when `allowlist` is chosen, an editable domain list reusing the
-add-folder modal pattern (each entry safety-checked: no bare IP without intent,
-no `*` alone).
+Implemented: Network is `off · restricted · on`. Choosing `restricted` opens an
+"Allowed network" section: the program's own servers (ticked, can't be
+unticked), a Documentation row with an All box, a Services row, and a Custom
+row with "+ Add custom" for a domain or IP address (each entry checked: no `*`
+alone, no `*.com`, a real address). A group
+that also reaches other people's accounts says so in its help line.
 
 ## 7. Testing
 

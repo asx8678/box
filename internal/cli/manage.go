@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/asx8678/box/internal/profile"
@@ -69,9 +70,15 @@ func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 }
 
 func summary(p profile.Profile, folders int) string {
-	net := "net off"
-	if p.Network {
-		net = "net on"
+	net := "net " + string(p.Network)
+	if p.Network == profile.NetRestricted {
+		allowed := slices.Clone(p.Allow.Groups)
+		if n := len(p.Allow.Hosts); n > 0 {
+			allowed = append(allowed, fmt.Sprintf("%d custom", n))
+		}
+		if len(allowed) > 0 {
+			net += " (" + strings.Join(allowed, ", ") + ")"
+		}
 	}
 	parts := []string{net, "project " + p.Workdir.Mode}
 	add := func(label string, paths ...[]string) {
