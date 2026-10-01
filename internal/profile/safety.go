@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -61,14 +62,6 @@ var noMount = []string{
 // NewProtected builds the protected set for this machine. boxBinary is the
 // path of the running box executable ("" to skip it).
 func NewProtected(h host.Host, d Dirs, boxBinary string, wsl bool) (Protected, error) {
-	p := Protected{Home: d.Home, WSL: wsl}
-	add := func(list *[]string, path string) error {
-		c, err := Canonical(h, path)
-		if err == nil && !slices.Contains(*list, c) {
-			*list = append(*list, c)
-		}
-		return err
-	}
 	noWrite := []string{d.Config, d.Data}
 	for _, f := range startupFiles {
 		noWrite = append(noWrite, filepath.Join(d.Home, f))
@@ -94,27 +87,44 @@ func NewProtected(h host.Host, d Dirs, boxBinary string, wsl bool) (Protected, e
 			noWrite = append(noWrite, c)
 		}
 	}
-	for _, l := range []struct {
-		list  *[]string
-		paths []string
-	}{{&p.NoWrite, noWrite}, {&p.Box, []string{d.Config, d.Data, d.State}}, {&p.Secrets, secrets}} {
-		for _, path := range l.paths {
-			if err := add(l.list, path); err != nil {
-				return Protected{}, err
-			}
-		}
-	}
+	exits := noMount
 	if rt := h.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(rt) {
-		if err := add(&p.NoMount, rt); err != nil {
-			return Protected{}, err
-		}
+		exits = append([]string{rt}, noMount...)
 	}
-	for _, path := range noMount {
-		if err := add(&p.NoMount, path); err != nil {
-			return Protected{}, err
-		}
+	p := Protected{Home: d.Home, WSL: wsl}
+	var errs [4]error
+	p.NoWrite, errs[0] = canonicalSet(h, noWrite)
+	p.NoMount, errs[1] = canonicalSet(h, exits)
+	p.Box, errs[2] = canonicalSet(h, []string{d.Config, d.Data, d.State})
+	p.Secrets, errs[3] = canonicalSet(h, secrets)
+	if err := errors.Join(errs[:]...); err != nil {
+		return Protected{}, err
 	}
 	return p, nil
+}
+
+// canonicalSet resolves paths, dropping repeats.
+func canonicalSet(h host.Host, paths []string) ([]string, error) {
+	var out []string
+	for _, path := range paths {
+		c, err := Canonical(h, path)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// overlapping returns the first of list that path overlaps.
+func overlapping(path string, list []string) (string, bool) {
+	i := slices.IndexFunc(list, func(q string) bool { return overlaps(path, q) })
+	if i < 0 {
+		return "", false
+	}
+	return list[i], true
 }
 
 // CheckWorkdir refuses working folders that would expose too much.
@@ -136,10 +146,8 @@ func (p Protected) CheckRW(path string) error {
 	if Within(p.Home, path) {
 		return fmt.Errorf("%s can't be read-write: it contains your whole home folder", path)
 	}
-	for _, q := range p.NoWrite {
-		if overlaps(path, q) {
-			return fmt.Errorf("%s can't be read-write: it overlaps %s", path, q)
-		}
+	if q, ok := overlapping(path, p.NoWrite); ok {
+		return fmt.Errorf("%s can't be read-write: it overlaps %s", path, q)
 	}
 	if p.WSL {
 		if windowsUserPath(path) {
@@ -158,15 +166,11 @@ func (p Protected) CheckMount(h host.Host, path string) error {
 	if Within(p.Home, path) {
 		return fmt.Errorf("%s can't be mounted: it contains your whole home folder; pick the folders inside it the program needs", path)
 	}
-	for _, q := range p.NoMount {
-		if overlaps(path, q) {
-			return fmt.Errorf("%s can't be mounted: it overlaps %s, which leads out of the box", path, q)
-		}
+	if q, ok := overlapping(path, p.NoMount); ok {
+		return fmt.Errorf("%s can't be mounted: it overlaps %s, which leads out of the box", path, q)
 	}
-	for _, q := range p.Box {
-		if overlaps(path, q) {
-			return fmt.Errorf("%s can't be mounted: it overlaps %s, where box keeps its own files", path, q)
-		}
+	if q, ok := overlapping(path, p.Box); ok {
+		return fmt.Errorf("%s can't be mounted: it overlaps %s, where box keeps its own files", path, q)
 	}
 	if fi, err := h.Lstat(path); err == nil && fi.Mode()&fs.ModeSocket != 0 {
 		return fmt.Errorf("%s can't be mounted: it's a socket, and a read-only mount doesn't stop connecting to it", path)
@@ -177,11 +181,9 @@ func (p Protected) CheckMount(h host.Host, path string) error {
 // CheckSecret refuses a folder box worked out from the program, its
 // interpreter or a virtualenv when it overlaps a credentials folder.
 func (p Protected) CheckSecret(path string) error {
-	for _, q := range p.Secrets {
-		if overlaps(path, q) {
-			return fmt.Errorf("the program's folder %s overlaps %s, which holds credentials; "+
-				"a script's interpreter line or pyvenv.cfg pointed there, so box won't mount it", path, q)
-		}
+	if q, ok := overlapping(path, p.Secrets); ok {
+		return fmt.Errorf("the program's folder %s overlaps %s, which holds credentials; "+
+			"a script's interpreter line or pyvenv.cfg pointed there, so box won't mount it", path, q)
 	}
 	return nil
 }

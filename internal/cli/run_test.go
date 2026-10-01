@@ -8,6 +8,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/asx8678/box/internal/host"
+	"github.com/asx8678/box/internal/profile"
 )
 
 func TestParse(t *testing.T) {
@@ -140,5 +143,23 @@ func TestDryRunEndToEnd(t *testing.T) {
 		if out, code = boxRun("-n", "default", "--no-tui", "sh"); code != ExitBox || !strings.Contains(out, "needs Linux") {
 			t.Errorf("running off Linux must fail closed: exit %d\n%s", code, out)
 		}
+	}
+}
+
+func TestCheckPathRefusesTheWholeHome(t *testing.T) {
+	f := host.NewFake().Dir("/home/u/code")
+	f.Env["HOME"] = "/home/u"
+	dirs, _ := profile.DirsFor(f)
+	prot, err := profile.NewProtected(f, dirs, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rw := range []bool{false, true} {
+		if err := checkPath(f, "/home/u", prot, "~", rw, true); err == nil || !strings.Contains(err.Error(), "whole home folder") {
+			t.Errorf("rw=%v: got %v", rw, err)
+		}
+	}
+	if err := checkPath(f, "/home/u", prot, "~/code", false, true); err != nil {
+		t.Errorf("~/code: %v", err)
 	}
 }

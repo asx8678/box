@@ -153,11 +153,10 @@ func memfd(name string, data []byte) (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("memfd: %w", err)
 	}
-	if _, err := unix.Write(fd, data); err != nil {
-		unix.Close(fd)
-		return -1, fmt.Errorf("memfd: %w", err)
+	if _, err = unix.Write(fd, data); err == nil {
+		_, err = unix.Seek(fd, 0, 0)
 	}
-	if _, err := unix.Seek(fd, 0, 0); err != nil {
+	if err != nil {
 		unix.Close(fd)
 		return -1, fmt.Errorf("memfd: %w", err)
 	}

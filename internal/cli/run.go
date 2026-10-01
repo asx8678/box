@@ -471,9 +471,6 @@ func checkPath(h host.Host, home string, prot profile.Protected, raw string, rw,
 	if err != nil {
 		return err
 	}
-	if c == home {
-		return errors.New("that's your whole home folder; pick the folders inside it the program needs")
-	}
 	if _, err := h.Stat(c); err != nil && mustExist {
 		return fmt.Errorf("%s doesn't exist", raw)
 	}
