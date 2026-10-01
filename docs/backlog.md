@@ -3,30 +3,30 @@
 100 items from a full review by three independent reviewers plus my own checks. Items marked "reproduced" were re-run against the real code. Tags: effort S, M or L, then now, later or drop.
 
 ## Fix first: security and lost work
-1. Dry run and Preview print the real values of passed variables such as API keys. Print `NAME="$NAME"`. Reproduced. S, now
-2. `box -r`: a double-tapped `y` also answers the second question and deletes the private home. Reproduced. S, now
-3. Git protection is bypassable in an ordinary repo through `.git/commondir`, the index, `HEAD` and `.git/modules`. Bind all of `.git` read-only by default. M, now
-4. Git protection skips a folder with no `.git` yet, a `.git` file, subfolders and nested repos. Reproduced. M, now
-5. A script in a writable folder can make box mount `~/.ssh` next run, through its shebang and `pyvenv.cfg`. M, now
-6. `LD_PRELOAD` and `LD_LIBRARY_PATH` from a profile reach bubblewrap itself. Reproduced. M, now
-7. Run as root, the program keeps all capabilities. Refuse uid 0 or drop them. S, now
-8. `strict = true` likely makes bwrap refuse to start; its test passes on any failure. S, now
-9. `box --box-init -- prog` runs the program with no sandbox. S, now
-10. File descriptors box inherited pass into the sandbox. S, now
-11. The planted-symlink check only knows this run's writable folders. M, later
-12. PATH folders are protected only under the home folder. S, now
-13. WSL rules match only `/mnt/<letter>` and protect only AppData. M, later
-14. box's own config and data can be mounted read-only into a box. Reproduced. S, now
-15. A folder holding a socket is accepted, only the socket itself is refused. S, later
-16. The protected list misses `~/.bash_aliases`, `~/.aws`, `~/.kube` and others, and ignores XDG_CONFIG_HOME. S, now
-17. Text typed in an add box is thrown away by clicking Save & run. Reproduced. S, now
-18. Cancel can't be confirmed from the keyboard. Reproduced. S, now
-19. A focused Cancel looks exactly like Save & run. Reproduced. S, now
-20. Keys typed before the screen appears are obeyed: an early Enter accepts the preset and runs. S, now
-21. The editor opens before the folder check, and `--dry-run` silently discards edits. S, now
-22. A damaged `folders.toml` blocks every command, including `-l` and `-r`. Reproduced. S, now
-23. `/dev/null` is taken for a terminal. Reproduced. S, now
-24. Control characters in folder names are drawn raw in the editor. S, now
+1. Dry run and Preview print the real values of passed variables such as API keys. Print `NAME="$NAME"`. Reproduced. S, now **Done** (batch 1).
+2. `box -r`: a double-tapped `y` also answers the second question and deletes the private home. Reproduced. S, now **Done** (batch 1).
+3. Git protection is bypassable in an ordinary repo through `.git/commondir`, the index, `HEAD` and `.git/modules`. Bind all of `.git` read-only by default. M, now **Done** (batch 1).
+4. Git protection skips a folder with no `.git` yet, a `.git` file, subfolders and nested repos. Reproduced. M, now **Done** (batch 1).
+5. A script in a writable folder can make box mount `~/.ssh` next run, through its shebang and `pyvenv.cfg`. M, now **Done** (batch 1).
+6. `LD_PRELOAD` and `LD_LIBRARY_PATH` from a profile reach bubblewrap itself. Reproduced. M, now **Done** (batch 1); not yet verified on Linux.
+7. Run as root, the program keeps all capabilities. Refuse uid 0 or drop them. S, now **Done** (batch 1); not yet verified on Linux.
+8. `strict = true` likely makes bwrap refuse to start; its test passes on any failure. S, now **Done** (batch 1); not yet verified on Linux.
+9. `box --box-init -- prog` runs the program with no sandbox. S, now **Done** (batch 1); not yet verified on Linux.
+10. File descriptors box inherited pass into the sandbox. S, now **Done** (batch 1); not yet verified on Linux.
+11. The planted-symlink check only knows this run's writable folders. M, later Moved to batch 5.
+12. PATH folders are protected only under the home folder. S, now **Done** (batch 1).
+13. WSL rules match only `/mnt/<letter>` and protect only AppData. M, later Moved to batch 5.
+14. box's own config and data can be mounted read-only into a box. Reproduced. S, now **Done** (batch 1).
+15. A folder holding a socket is accepted, only the socket itself is refused. S, later Moved to batch 5.
+16. The protected list misses `~/.bash_aliases`, `~/.aws`, `~/.kube` and others, and ignores XDG_CONFIG_HOME. S, now **Done** (batch 1).
+17. Text typed in an add box is thrown away by clicking Save & run. Reproduced. S, now **Done** (batch 1).
+18. Cancel can't be confirmed from the keyboard. Reproduced. S, now **Done** (batch 1).
+19. A focused Cancel looks exactly like Save & run. Reproduced. S, now **Done** (batch 1).
+20. Keys typed before the screen appears are obeyed: an early Enter accepts the preset and runs. S, now **Done** (batch 1).
+21. The editor opens before the folder check, and `--dry-run` silently discards edits. S, now **Done** (batch 1).
+22. A damaged `folders.toml` blocks every command, including `-l` and `-r`. Reproduced. S, now **Done** (batch 1).
+23. `/dev/null` is taken for a terminal. Reproduced. S, now **Done** (batch 1).
+24. Control characters in folder names are drawn raw in the editor. S, now **Done** (batch 1).
 
 ## The screen
 25. Move Save & run up: put it in the header and let the footer follow the content. S, now
@@ -120,7 +120,7 @@
 99. A tagged release with binaries and checksums, Go 1.26, uninstall. M, now
 100. An audit log of runs for teams. M, later
 
-## Plan for doing all 100 (saved 2026-10-01, not started)
+## Plan for doing all 100 (saved 2026-10-01; batch 1 done on branch batch-1, see batch-1-plan.md)
 
 Work in batches, commit after each, full tests in between:
 1. Items 1–24: security and lost-work fixes.

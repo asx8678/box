@@ -1,5 +1,10 @@
 # Batch 1 plan: security and lost-work fixes (backlog items 1–24)
 
+**Status: done** on branch `batch-1`, one commit per group (A `55da810`, D `7659337`, B `0af6af0`,
+C `7c4026d`, E `ad6dfa3`, F `57f43ba`). Unit tests, vet and the Linux build pass on macOS. Still
+to do on the WSL machine: `make test-linux`, which runs the new end-to-end tests for items 3, 6,
+8, 9 and 10.
+
 1 October 2026 · scope checked against the code on main (`c0911a5`, plus the uncommitted simplification)
 
 Batch 1 is 24 items: 21 tagged "now" and 3 tagged "later" (11, 13, 15). This plan does the 21 "now"
