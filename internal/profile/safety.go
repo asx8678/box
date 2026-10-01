@@ -21,15 +21,31 @@ type Protected struct {
 	// NoMount may not be mounted at all, in any mode: sockets and folders
 	// that hand the program a way out of the box.
 	NoMount []string
+	// Box is box's own config, data and state, which no box may see.
+	Box []string
+	// Secrets hold credentials. A profile may list them read-only, but the
+	// folders box works out from a program (its shebang, a virtualenv's
+	// pyvenv.cfg) may not reach them: a script the program could write
+	// would otherwise choose them.
+	Secrets []string
 	// WSL turns on the rules for Windows paths under /mnt.
 	WSL bool
 }
 
-// shellStartup are files a shell runs at startup.
-var shellStartup = []string{
-	".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile",
-	".zshrc", ".zshenv", ".zprofile", ".zlogin", ".config/fish",
-}
+// startupFiles are files in the home folder that run code, or decide what
+// runs, the next time something starts outside the box: shells, editors,
+// git, docker and npm. configFiles are the same under the config folder.
+var (
+	startupFiles = []string{
+		".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases", ".profile",
+		".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".inputrc",
+		".vimrc", ".vim", ".emacs", ".emacs.d", ".tmux.conf",
+		".gitconfig", // aliases, core.fsmonitor, core.hooksPath
+		".ssh", ".gnupg", ".aws", ".kube", ".docker", ".npmrc",
+	}
+	configFiles = []string{"git", "fish", "nvim", "pip", "Code", "systemd", "autostart", "environment.d"}
+	secretFiles = []string{".ssh", ".gnupg", ".aws", ".kube", ".docker", ".netrc", ".git-credentials", ".password-store"}
+)
 
 // noMount are daemon sockets and Windows interop paths.
 var noMount = []string{
@@ -53,34 +69,38 @@ func NewProtected(h host.Host, d Dirs, boxBinary string, wsl bool) (Protected, e
 		}
 		return err
 	}
-	noWrite := []string{
-		d.Config,
-		d.Data,
-		filepath.Join(d.Home, ".ssh"),
-		filepath.Join(d.Home, ".gnupg"),
-		filepath.Join(d.Home, ".gitconfig"), // aliases, core.fsmonitor, core.hooksPath
-		filepath.Join(d.Home, ".config/git"),
-		filepath.Join(d.Home, ".config/systemd"),
-		filepath.Join(d.Home, ".config/autostart"),
-	}
-	for _, f := range shellStartup {
+	noWrite := []string{d.Config, d.Data}
+	for _, f := range startupFiles {
 		noWrite = append(noWrite, filepath.Join(d.Home, f))
+	}
+	// Both ~/.config and $XDG_CONFIG_HOME, whichever programs read.
+	for _, base := range []string{filepath.Join(d.Home, ".config"), filepath.Dir(d.Config)} {
+		for _, f := range configFiles {
+			noWrite = append(noWrite, filepath.Join(base, f))
+		}
+	}
+	secrets := []string{filepath.Join(filepath.Dir(d.Config), "gh")}
+	for _, f := range secretFiles {
+		secrets = append(secrets, filepath.Join(d.Home, f))
 	}
 	if boxBinary != "" {
 		noWrite = append(noWrite, filepath.Dir(boxBinary))
 	}
-	// Folders on PATH under $HOME: a program that can write there can plant
-	// a command the user will run outside the box.
+	// Every folder on PATH: a program that can write there can plant a
+	// command the user will run outside the box.
 	for _, dir := range filepath.SplitList(h.Getenv("PATH")) {
-		if filepath.IsAbs(dir) {
-			if c, err := Canonical(h, dir); err == nil && Within(c, d.Home) && c != d.Home {
-				noWrite = append(noWrite, c)
-			}
+		if filepath.IsAbs(dir) && filepath.Clean(dir) != "/" {
+			noWrite = append(noWrite, dir)
 		}
 	}
-	for _, path := range noWrite {
-		if err := add(&p.NoWrite, path); err != nil {
-			return Protected{}, err
+	for _, l := range []struct {
+		list  *[]string
+		paths []string
+	}{{&p.NoWrite, noWrite}, {&p.Box, []string{d.Config, d.Data, d.State}}, {&p.Secrets, secrets}} {
+		for _, path := range l.paths {
+			if err := add(l.list, path); err != nil {
+				return Protected{}, err
+			}
 		}
 	}
 	if rt := h.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(rt) {
@@ -134,13 +154,33 @@ func (p Protected) CheckRW(path string) error {
 // CheckMount refuses mounting daemon sockets, interop paths or anything
 // containing them, in any mode.
 func (p Protected) CheckMount(h host.Host, path string) error {
+	if Within(p.Home, path) {
+		return fmt.Errorf("%s can't be mounted: it contains your whole home folder; pick the folders inside it the program needs", path)
+	}
 	for _, q := range p.NoMount {
 		if overlaps(path, q) {
 			return fmt.Errorf("%s can't be mounted: it overlaps %s, which leads out of the box", path, q)
 		}
 	}
+	for _, q := range p.Box {
+		if overlaps(path, q) {
+			return fmt.Errorf("%s can't be mounted: it overlaps %s, where box keeps its own files", path, q)
+		}
+	}
 	if fi, err := h.Lstat(path); err == nil && fi.Mode()&fs.ModeSocket != 0 {
 		return fmt.Errorf("%s can't be mounted: it's a socket, and a read-only mount doesn't stop connecting to it", path)
+	}
+	return nil
+}
+
+// CheckSecret refuses a folder box worked out from the program, its
+// interpreter or a virtualenv when it overlaps a credentials folder.
+func (p Protected) CheckSecret(path string) error {
+	for _, q := range p.Secrets {
+		if overlaps(path, q) {
+			return fmt.Errorf("the program's folder %s overlaps %s, which holds credentials; "+
+				"a script's interpreter line or pyvenv.cfg pointed there, so box won't mount it", path, q)
+		}
 	}
 	return nil
 }

@@ -197,7 +197,33 @@ func TestRefuses(t *testing.T) {
 		{"runtime dir", func(f *host.Fake, in *Input) { in.Profile.Home.RO = []string{"/run/user/1000"} }, "leads out of the box"},
 		{"any socket", func(f *host.Fake, in *Input) { in.Profile.Extra.RO = []string{"~/code/agent.sock"} }, "it's a socket"},
 		{"missing extra", func(f *host.Fake, in *Input) { in.Profile.Extra.RO = []string{"~/nope"} }, "doesn't exist"},
-		{"mounted twice", func(f *host.Fake, in *Input) { in.Profile.Home.RO = []string{"~"} }, "mounted twice"},
+		{"mounted twice", func(f *host.Fake, in *Input) { in.Profile.Extra.RO = []string{"~/code/proj"} }, "mounted twice"},
+		{"ro home", func(f *host.Fake, in *Input) { in.Profile.Home.RO = []string{"~"} }, "whole home folder"},
+		{"box's own config", func(f *host.Fake, in *Input) { in.Profile.Extra.RO = []string{"~/.config/box"} }, "box keeps its own files"},
+		{"box's private homes", func(f *host.Fake, in *Input) {
+			f.Dir("/home/u/.local/share/box/homes/other")
+			in.Profile.Extra.RO = []string{"~/.local/share/box/homes/other"}
+		}, "box keeps its own files"},
+		{"rw PATH folder outside home", func(f *host.Fake, in *Input) {
+			f.Dir("/opt/tool/bin")
+			f.Env["PATH"] = "/opt/tool/bin:" + f.Env["PATH"]
+			in.Protected, _ = profile.NewProtected(f, in.Dirs, "", true)
+			in.Profile.Extra.RW = []string{"/opt/tool"}
+		}, "overlaps /opt/tool/bin"},
+		{"rw ~/.aws", func(f *host.Fake, in *Input) {
+			f.Dir("/home/u/.aws")
+			in.Profile.Extra.RW = []string{"~/.aws"}
+		}, "overlaps /home/u/.aws"},
+		{"rw git config under XDG_CONFIG_HOME", func(f *host.Fake, in *Input) {
+			f.Dir("/home/u/xdg/git")
+			f.Env["XDG_CONFIG_HOME"] = "/home/u/xdg"
+			in.Dirs, _ = profile.DirsFor(f)
+			in.Protected, _ = profile.NewProtected(f, in.Dirs, "", true)
+			in.Profile.Extra.RW = []string{"~/xdg/git"}
+		}, "overlaps /home/u/xdg/git"},
+		{"interpreter line points at ~/.ssh", func(f *host.Fake, in *Input) {
+			in.ProgramDirs = []string{"/home/u/.ssh"}
+		}, "holds credentials"},
 		{"denied variable", func(f *host.Fake, in *Input) { in.Profile.Env.Pass = []string{"WSL_INTEROP"} }, "way out of the box"},
 		{"git symlink", func(f *host.Fake, in *Input) {
 			f.Dir("/home/u/code/other").Symlink("/home/u/code/other/.git", "/home/u/.ssh")
@@ -546,5 +572,22 @@ func TestDryRunHidesPassedValues(t *testing.T) {
 	}
 	if !slices.Contains(plan.Env, "FOO_API_KEY=s3cret-value") {
 		t.Errorf("the program must still get the value: %v", plan.Env)
+	}
+}
+
+// A script in the project chooses its interpreter. Pointing it into ~/.ssh
+// must not get ~/.ssh mounted on the next run.
+func TestScriptCantSteerMountsToSecrets(t *testing.T) {
+	f := machine()
+	f.File("/home/u/.ssh/x", "", 0o755)
+	f.File("/home/u/code/proj/run.sh", "#!/home/u/.ssh/x\n", 0o755)
+	prog, err := Lookup(f, "./run.sh", f.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := input(t, f, profile.Default("run.sh"))
+	in.Program, in.ProgramDirs = prog.Path, prog.Dirs
+	if _, err := Build(f, in); err == nil || !strings.Contains(err.Error(), "holds credentials") {
+		t.Fatalf("got %v, want a refusal naming credentials", err)
 	}
 }

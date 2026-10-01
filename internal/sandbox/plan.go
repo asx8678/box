@@ -375,6 +375,9 @@ func (b *builder) programDirs(dirs []string, wd, home string) error {
 		if err := b.prot.CheckMount(b.h, c); err != nil {
 			return err
 		}
+		if err := b.prot.CheckSecret(c); err != nil {
+			return err
+		}
 		if i >= 0 {
 			if b.mounts[i].Kind != Bind || b.mounts[i].Src != c {
 				return fmt.Errorf("the program's folder %s is a fresh, private folder inside the box; "+
