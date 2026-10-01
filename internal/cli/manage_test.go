@@ -140,3 +140,14 @@ func TestListWithEmptyProgramFolder(t *testing.T) {
 		t.Errorf("exit %d: %q", code, out.String())
 	}
 }
+
+func TestDevNullIsNotATerminal(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if isTerminal(f) {
+		t.Error("/dev/null taken for a terminal")
+	}
+}

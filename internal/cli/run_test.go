@@ -86,6 +86,13 @@ func TestDryRunEndToEnd(t *testing.T) {
 		return string(out), code
 	}
 
+	// A folder box can't run in is refused before any profile is chosen.
+	home1 := exec.Command(bin, "--dry-run", "--no-tui", "sh")
+	home1.Dir = home
+	home1.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin"}
+	if out, _ := home1.CombinedOutput(); !strings.Contains(string(out), "whole home folder") {
+		t.Errorf("running in home:\n%s", out)
+	}
 	out, code := boxRun("--dry-run", "sh", "-c", "echo hi")
 	if code != ExitBox || !strings.Contains(out, "no profile yet") {
 		t.Fatalf("without a profile: exit %d\n%s", code, out)

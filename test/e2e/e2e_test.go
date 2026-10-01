@@ -286,6 +286,8 @@ func TestStrictBlocksNestedSandboxes(t *testing.T) {
 	p := profile.Default("sh")
 	p.Sandbox.Strict = true
 	e.profile(p)
+	// Strict must still run the program; only nesting fails.
+	e.sh("true")
 	if _, _, code := e.run("sh", "-c", nested); code == 0 {
 		t.Error("strict should stop the program from creating user namespaces")
 	}

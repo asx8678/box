@@ -13,6 +13,9 @@ import (
 type Folders struct {
 	path    string
 	Entries map[string]map[string]string `toml:"folders"` // folder → program → profile
+	// Damaged says why the file couldn't be read and where it was moved;
+	// the memory then starts empty. Callers show it as a warning.
+	Damaged string `toml:"-"`
 }
 
 // FoldersPath is where folder memory is stored.
@@ -20,7 +23,10 @@ func FoldersPath(d Dirs) string {
 	return filepath.Join(d.Config, "folders.toml")
 }
 
-// LoadFolders reads folder memory; a missing file is empty memory.
+// LoadFolders reads folder memory; a missing file is empty memory. A file
+// box can't read is moved aside to <path>.bad, so a damaged file costs only
+// the memory, not every command; one owned or writable by someone else is
+// still refused.
 func LoadFolders(path string) (*Folders, error) {
 	f := &Folders{path: path, Entries: map[string]map[string]string{}}
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
@@ -30,11 +36,15 @@ func LoadFolders(path string) (*Folders, error) {
 		return nil, err
 	}
 	md, err := toml.DecodeFile(path, f)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if err == nil && len(md.Undecoded()) > 0 {
+		err = fmt.Errorf("unknown key %s", md.Undecoded()[0])
 	}
-	if keys := md.Undecoded(); len(keys) > 0 {
-		return nil, fmt.Errorf("%s: unknown key %s", path, keys[0])
+	if err != nil {
+		if rerr := os.Rename(path, path+".bad"); rerr != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		f.Entries = map[string]map[string]string{}
+		f.Damaged = fmt.Sprintf("%s couldn't be read (%v); moved it to %s.bad and forgot which profile each folder uses", path, err, path)
 	}
 	if f.Entries == nil {
 		f.Entries = map[string]map[string]string{}

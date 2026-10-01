@@ -337,7 +337,7 @@ func TestFlags(t *testing.T) {
 		{"no filter possible", func(in *Input) { in.LegacyTIOCSTI = "1"; in.Arch = "riscv64" }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--new-session"}, Filter{}},
 		{"not WSL", func(in *Input) { in.Protected.WSL = false }, []string{"--unshare-all", "--share-net", "--die-with-parent"}, Filter{}},
 		{"--no-net", func(in *Input) { in.Network = &off }, []string{"--unshare-all", "--die-with-parent"}, Filter{Vsock: true}},
-		{"strict", func(in *Input) { in.Profile.Sandbox.Strict = true }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--disable-userns"}, Filter{Vsock: true}},
+		{"strict", func(in *Input) { in.Profile.Sandbox.Strict = true }, []string{"--unshare-all", "--share-net", "--die-with-parent", "--unshare-user", "--disable-userns"}, Filter{Vsock: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

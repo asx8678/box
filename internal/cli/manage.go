@@ -9,14 +9,16 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
+
 	"github.com/asx8678/box/internal/profile"
 	"github.com/asx8678/box/internal/tui"
 )
 
-// isTerminal reports whether f is a terminal (a character device).
+// isTerminal reports whether f is a terminal; /dev/null, also a character
+// device, isn't.
 func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(f.Fd())
 }
 
 // interactive reports whether box can ask the user something.
@@ -36,7 +38,7 @@ func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 	if err != nil && !os.IsNotExist(err) {
 		return fail(stderr, err)
 	}
-	folders, err := profile.LoadFolders(profile.FoldersPath(dirs))
+	folders, err := loadFolders(dirs, stderr)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -123,7 +125,7 @@ func reset(dirs profile.Dirs, program string, yes bool, stdout, stderr io.Writer
 	if err != nil {
 		return fail(stderr, err)
 	}
-	folders, err := profile.LoadFolders(profile.FoldersPath(dirs))
+	folders, err := loadFolders(dirs, stderr)
 	if err != nil {
 		return fail(stderr, err)
 	}

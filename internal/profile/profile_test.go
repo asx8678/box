@@ -244,3 +244,27 @@ func TestList(t *testing.T) {
 		t.Errorf("missing program: %v, %v", names, err)
 	}
 }
+
+func TestDamagedFoldersFileIsSetAside(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "folders.toml")
+	os.WriteFile(path, []byte("[folders\nnot toml"), 0o600)
+	f, err := LoadFolders(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Damaged == "" || len(f.Entries) != 0 {
+		t.Errorf("damaged %q, entries %v", f.Damaged, f.Entries)
+	}
+	if _, err := os.Stat(path + ".bad"); err != nil {
+		t.Errorf("not moved aside: %v", err)
+	}
+	f.Set("/p", "sh", "default")
+	if err := f.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// Writable by others is still refused, not set aside.
+	os.Chmod(path, 0o666)
+	if _, err := LoadFolders(path); err == nil {
+		t.Error("a folders file writable by others was accepted")
+	}
+}

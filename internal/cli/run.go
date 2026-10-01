@@ -192,12 +192,20 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 			fmt.Fprintf(stderr, "box: warning: %v\n     (printing the command anyway)\n", perr)
 		}
 	}
-	folders, err := profile.LoadFolders(profile.FoldersPath(dirs))
+	folders, err := loadFolders(dirs, stderr)
 	if err != nil {
 		return ExitBox, err
 	}
 	r.self, _ = os.Executable()
 	if r.prot, err = profile.NewProtected(h, dirs, r.self, r.probe.WSL); err != nil {
+		return ExitBox, err
+	}
+	// Refuse a folder box can't run in before the editor opens, not after
+	// the user has made their choices in it.
+	if err := r.prot.CheckWorkdir(r.wd); err != nil {
+		return ExitBox, err
+	}
+	if err := r.prot.CheckMount(h, r.wd); err != nil {
 		return ExitBox, err
 	}
 	if o.net || o.noNet {
@@ -226,10 +234,15 @@ func run(h host.Host, dirs profile.Dirs, o options, name string, args []string, 
 	if err != nil {
 		return ExitBox, err
 	}
-	// A new or edited profile is saved only once its sandbox is known to be valid.
-	if (sel.edit || sel.isNew) && !o.dryRun {
+	// A new or edited profile is saved only once its sandbox is known to be
+	// valid. One saved in the editor is saved under --dry-run too: the user
+	// pressed Save.
+	if sel.edit || (sel.isNew && !o.dryRun) {
 		if err := profile.Save(profile.Path(dirs, r.prog.Name, name), p); err != nil {
 			return ExitBox, err
+		}
+		if o.dryRun {
+			fmt.Fprintf(stderr, "box: saved profile %s; nothing ran (--dry-run)\n", name)
 		}
 	}
 	plan.FlushInput = sel.edit || sel.picked
@@ -552,6 +565,15 @@ func older(v, than string) bool {
 		}
 	}
 	return false
+}
+
+// loadFolders reads folder memory, warning when a damaged file was set aside.
+func loadFolders(dirs profile.Dirs, stderr io.Writer) (*profile.Folders, error) {
+	f, err := profile.LoadFolders(profile.FoldersPath(dirs))
+	if err == nil && f.Damaged != "" {
+		fmt.Fprintf(stderr, "box: warning: %s\n", f.Damaged)
+	}
+	return f, err
 }
 
 func fail(stderr io.Writer, err error) int {

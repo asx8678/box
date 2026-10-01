@@ -289,7 +289,9 @@ func (plan *Plan) flags(in Input, shareNet bool) {
 		plan.NewSession = true
 	}
 	if in.Profile.Sandbox.Strict {
-		plan.Flags = append(plan.Flags, "--disable-userns")
+		// bwrap only accepts --disable-userns with a user namespace it must
+		// create, and --unshare-all only tries to.
+		plan.Flags = append(plan.Flags, "--unshare-user", "--disable-userns")
 	}
 }
 
