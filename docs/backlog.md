@@ -119,3 +119,14 @@
 98. LICENSE and SECURITY.md. S, now
 99. A tagged release with binaries and checksums, Go 1.26, uninstall. M, now
 100. An audit log of runs for teams. M, later
+
+## Plan for doing all 100 (saved 2026-10-01, not started)
+
+Work in batches, commit after each, full tests in between:
+1. Items 1–24: security and lost-work fixes.
+2. Items 25–48: screen and editor.
+3. Items 49–75: picker, command line, profiles.
+4. Items 76–83: the proxy that enforces "restricted", then the groups.
+5. Items 84–100: hardening, tests, docs, release.
+
+Needs a real WSL2 machine, can't be done from macOS: 90 and the decisions in 89.
