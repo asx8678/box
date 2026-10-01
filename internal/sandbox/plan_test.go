@@ -210,6 +210,15 @@ func TestRefuses(t *testing.T) {
 			in.Protected, _ = profile.NewProtected(f, in.Dirs, "", true)
 			in.Profile.Extra.RW = []string{"/opt/tool"}
 		}, "overlaps /opt/tool/bin"},
+		{"PATH with a broken symlink still protects the rest", func(f *host.Fake, in *Input) {
+			f.Symlink("/opt/gone", "/nowhere").Dir("/opt/tool/bin")
+			f.Env["PATH"] = "/opt/gone:/opt/tool/bin:" + f.Env["PATH"]
+			var err error
+			if in.Protected, err = profile.NewProtected(f, in.Dirs, "", true); err != nil {
+				t.Fatalf("a broken PATH entry stopped box: %v", err)
+			}
+			in.Profile.Extra.RW = []string{"/opt/tool"}
+		}, "overlaps /opt/tool/bin"},
 		{"rw ~/.aws", func(f *host.Fake, in *Input) {
 			f.Dir("/home/u/.aws")
 			in.Profile.Extra.RW = []string{"~/.aws"}

@@ -87,10 +87,11 @@ func NewProtected(h host.Host, d Dirs, boxBinary string, wsl bool) (Protected, e
 		noWrite = append(noWrite, filepath.Dir(boxBinary))
 	}
 	// Every folder on PATH: a program that can write there can plant a
-	// command the user will run outside the box.
+	// command the user will run outside the box. An entry that can't be
+	// resolved (a broken symlink) is skipped: PATH often holds such leftovers.
 	for _, dir := range filepath.SplitList(h.Getenv("PATH")) {
-		if filepath.IsAbs(dir) && filepath.Clean(dir) != "/" {
-			noWrite = append(noWrite, dir)
+		if c, err := Canonical(h, dir); filepath.IsAbs(dir) && err == nil && c != "/" {
+			noWrite = append(noWrite, c)
 		}
 	}
 	for _, l := range []struct {
