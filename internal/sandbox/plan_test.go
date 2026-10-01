@@ -524,3 +524,27 @@ func TestEnvArgsCarryTheWholeEnvironment(t *testing.T) {
 		t.Errorf("environment on the command line: %q", plan.Args())
 	}
 }
+
+func TestDryRunHidesPassedValues(t *testing.T) {
+	f := machine()
+	f.Env["FOO_API_KEY"] = "s3cret-value"
+	f.Env["SHOWN"] = "from-host"
+	p := profile.Default("mytool")
+	p.Env.Pass = []string{"FOO_API_KEY", "SHOWN"}
+	p.Env.Set = map[string]string{"SHOWN": "from-profile"}
+	plan, err := Build(f, input(t, f, p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dry := plan.DryRun("bwrap")
+	if strings.Contains(dry, "s3cret") || !strings.Contains(dry, `--setenv FOO_API_KEY "$FOO_API_KEY"`) {
+		t.Errorf("passed value printed, or its reference missing:\n%s", dry)
+	}
+	// A value the profile sets is the profile's own, and shown.
+	if !strings.Contains(dry, "--setenv SHOWN from-profile") {
+		t.Errorf("set value missing:\n%s", dry)
+	}
+	if !slices.Contains(plan.Env, "FOO_API_KEY=s3cret-value") {
+		t.Errorf("the program must still get the value: %v", plan.Env)
+	}
+}

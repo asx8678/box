@@ -72,10 +72,14 @@ const DryRunSeccompFD = 4
 // Plan is a finished sandbox: bwrap's arguments plus the environment
 // passed to it.
 type Plan struct {
-	Flags   []string
-	Mounts  []Mount
-	Chdir   string
-	Env     []string // KEY=VALUE, sorted; the program's whole environment
+	Flags  []string
+	Mounts []Mount
+	Chdir  string
+	Env    []string // KEY=VALUE, sorted; the program's whole environment
+	// Passed names the variables whose values were copied from the host
+	// because the profile passes them (API keys and the like). The dry run
+	// shows them as "$NAME", never their values.
+	Passed  []string
 	Command []string
 	Info    []byte // contents of /run/box/profile
 	InfoFD  int    // the fd that carries Info to bwrap; exec sets the real one
@@ -241,7 +245,7 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		plan.Allowed = p.Allowed()
 	}
 	plan.flags(in, network == profile.NetOn)
-	plan.Env = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), in.ProgramEnv)
+	plan.Env, plan.Passed = buildEnv(h, p, in.ProfileName, home, wd, visiblePath(h, b.mounts, privateHome), in.ProgramEnv)
 	plan.Info = fmt.Appendf(nil, "program=%s\nprofile=%s\nnetwork=%s\nworkdir=%s\n",
 		p.Program, in.ProfileName, network, wd)
 	return plan, nil
@@ -600,9 +604,10 @@ func visiblePath(h host.Host, mounts []Mount, privateHome string) string {
 // baseEnv are passed whenever they are set: the terminal and the locale.
 var baseEnv = []string{"TERM", "COLORTERM", "LANG", "LANGUAGE", "TZ", "NO_COLOR"}
 
-// buildEnv is the program's whole environment. box passes it straight to
-// execve, so nothing else from the host leaks in.
-func buildEnv(h host.Host, p profile.Profile, name, home, wd, path string, programEnv []string) []string {
+// buildEnv is the program's whole environment, and the names of the
+// variables in it that the profile passes from the host. bwrap itself runs
+// with an empty environment, so nothing else from the host leaks in.
+func buildEnv(h host.Host, p profile.Profile, name, home, wd, path string, programEnv []string) ([]string, []string) {
 	env := map[string]string{
 		"HOME":        home,
 		"PATH":        path,
@@ -620,23 +625,29 @@ func buildEnv(h host.Host, p profile.Profile, name, home, wd, path string, progr
 			env[k] = v
 		}
 	}
+	passed := map[string]bool{}
 	for _, k := range p.Env.Pass {
 		if v, ok := h.LookupEnv(k); ok {
-			env[k] = v
+			env[k], passed[k] = v, true
 		}
 	}
 	for _, kv := range programEnv {
 		if k, v, ok := strings.Cut(kv, "="); ok {
-			env[k] = v
+			env[k], passed[k] = v, false
 		}
 	}
 	for k, v := range p.Env.Set {
-		env[k] = v
+		env[k], passed[k] = v, false
 	}
 	out := make([]string, 0, len(env))
+	var names []string
 	for k, v := range env {
 		out = append(out, k+"="+v)
+		if passed[k] {
+			names = append(names, k)
+		}
 	}
 	sort.Strings(out)
-	return out
+	sort.Strings(names)
+	return out, names
 }

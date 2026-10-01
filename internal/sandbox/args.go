@@ -71,13 +71,18 @@ func (m Mount) args(fd int) []string {
 
 // DryRun renders the plan as a shell command that can be pasted and run:
 // bwrap with an empty environment, as box runs it, and one operation per
-// line, the program's environment included. The info file on fd 3 is
-// supplied with a bash here-string.
+// line, the program's environment included. Variables passed from the host
+// show as "$NAME", which the shell fills in, so no API key is printed. The
+// info file on fd 3 is supplied with a bash here-string.
 func (p *Plan) DryRun(bwrap string) string {
 	var b strings.Builder
 	b.WriteString("env -i " + Quote(bwrap))
 	for _, op := range p.ops(DryRunInfoFD, DryRunSeccompFD, true) {
 		b.WriteString(" \\\n  ")
+		if op[0] == "--setenv" && slices.Contains(p.Passed, op[1]) {
+			fmt.Fprintf(&b, `--setenv %s "$%s"`, op[1], op[1])
+			continue
+		}
 		for i, w := range op {
 			if i > 0 {
 				b.WriteByte(' ')

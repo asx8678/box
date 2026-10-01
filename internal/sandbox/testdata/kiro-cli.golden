@@ -2,7 +2,7 @@ env -i /usr/bin/bwrap \
   --unshare-all --share-net --die-with-parent \
   --setenv BOX_PROFILE kiro-cli/default \
   --setenv HOME /home/u \
-  --setenv KIRO_API_KEY k-123 \
+  --setenv KIRO_API_KEY "$KIRO_API_KEY" \
   --setenv LANG C.UTF-8 \
   --setenv LC_TIME en_GB.UTF-8 \
   --setenv PATH /home/u/.local/bin:/usr/local/bin:/usr/bin:/bin \
