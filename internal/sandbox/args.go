@@ -9,15 +9,42 @@ import (
 	"github.com/asx8678/box/internal/profile"
 )
 
-// Args is bwrap's argument list, without argv[0].
+// Args is bwrap's argument list, without argv[0] and without the
+// environment: Exec passes that through --args, so the values (API keys)
+// stay out of the command line every user on the machine can read.
 func (p *Plan) Args() []string {
-	return slices.Concat(p.ops(p.InfoFD, p.SeccompFD)...)
+	return slices.Concat(p.ops(p.InfoFD, p.SeccompFD, false)...)
+}
+
+// EnvArgs are the --setenv operations that give the program its whole
+// environment, as bwrap's --args reads them: each argument ends in a NUL.
+func (p *Plan) EnvArgs() []byte {
+	var b []byte
+	for _, op := range p.envOps() {
+		for _, w := range op {
+			b = append(append(b, w...), 0)
+		}
+	}
+	return b
+}
+
+func (p *Plan) envOps() [][]string {
+	var ops [][]string
+	for _, kv := range p.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		ops = append(ops, []string{"--setenv", k, v})
+	}
+	return ops
 }
 
 // ops is bwrap's argument list as one operation per entry, with the
-// descriptors that carry the info file and the seccomp filter.
-func (p *Plan) ops(infoFD, seccompFD int) [][]string {
+// descriptors that carry the info file and the seccomp filter, and the
+// environment when withEnv is set.
+func (p *Plan) ops(infoFD, seccompFD int, withEnv bool) [][]string {
 	ops := [][]string{p.Flags}
+	if withEnv {
+		ops = append(ops, p.envOps()...)
+	}
 	if p.Filter.Any() {
 		ops = append(ops, []string{"--seccomp", strconv.Itoa(seccompFD)})
 	}
@@ -43,18 +70,13 @@ func (m Mount) args(fd int) []string {
 }
 
 // DryRun renders the plan as a shell command that can be pasted and run:
-// env -i with the exact environment, then bwrap with one operation per line.
-// The info file on fd 3 is supplied with a bash here-string.
+// bwrap with an empty environment, as box runs it, and one operation per
+// line, the program's environment included. The info file on fd 3 is
+// supplied with a bash here-string.
 func (p *Plan) DryRun(bwrap string) string {
 	var b strings.Builder
-	b.WriteString("env -i")
-	for _, kv := range p.Env {
-		b.WriteString(" \\\n  ")
-		b.WriteString(Quote(kv))
-	}
-	b.WriteString(" \\\n")
-	b.WriteString(Quote(bwrap))
-	for _, op := range p.ops(DryRunInfoFD, DryRunSeccompFD) {
+	b.WriteString("env -i " + Quote(bwrap))
+	for _, op := range p.ops(DryRunInfoFD, DryRunSeccompFD, true) {
 		b.WriteString(" \\\n  ")
 		for i, w := range op {
 			if i > 0 {

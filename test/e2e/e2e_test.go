@@ -290,3 +290,53 @@ func TestWSLInteropIsUnreachable(t *testing.T) {
 		}
 	}
 }
+
+// A variable the profile sets reaches the program, never bwrap itself:
+// LD_PRELOAD in bwrap would run code before any sandbox exists.
+func TestProfileEnvDoesNotReachBwrap(t *testing.T) {
+	e := setup(t)
+	lib := e.root + "/outside.so" // exists outside only; not an ELF file
+	os.WriteFile(lib, []byte("not a library"), 0o644)
+	p := profile.Default("sh")
+	p.Env.Set = map[string]string{"LD_PRELOAD": lib}
+	e.profile(p)
+	out, stderr, code := e.run("--no-tui", "sh", "-c", `echo "$LD_PRELOAD"`)
+	if code != 0 || !strings.Contains(out, lib) {
+		t.Fatalf("exit %d, the program should see LD_PRELOAD\nstdout: %s\nstderr: %s", code, out, stderr)
+	}
+	// Inside the box the file doesn't exist; only bwrap could have read it.
+	for _, l := range strings.Split(stderr, "\n") {
+		if strings.Contains(l, "outside.so") && !strings.Contains(l, "cannot open") {
+			t.Errorf("LD_PRELOAD reached bwrap: %s", l)
+		}
+	}
+}
+
+// Descriptors box inherited don't pass into the sandbox.
+func TestInheritedFilesDontLeak(t *testing.T) {
+	e := setup(t)
+	marker, err := os.Create(e.root + "/inherited-marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer marker.Close()
+	cmd := exec.Command(boxBin, "--no-tui", "sh", "-c", `for f in /proc/self/fd/*; do readlink "$f"; done`)
+	cmd.Dir = e.proj
+	cmd.Env = []string{"HOME=" + e.home, "PATH=/usr/local/bin:/usr/bin:/bin"}
+	cmd.ExtraFiles = []*os.File{marker} // fd 3 in box
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "inherited-marker") {
+		t.Errorf("an inherited file is open inside the box:\n%s", out)
+	}
+}
+
+// --box-init runs a program only inside a box, never on the host.
+func TestBoxInitOnlyInsideABox(t *testing.T) {
+	out, err := exec.Command(boxBin, "--box-init", "--", "/bin/echo", "ran").CombinedOutput()
+	if err == nil || strings.Contains(string(out), "ran\n") {
+		t.Errorf("box --box-init ran a program outside a box:\n%s", out)
+	}
+}

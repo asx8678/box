@@ -25,6 +25,12 @@ func Init(argv []string) int {
 		fmt.Fprintln(os.Stderr, "box init: no program")
 		return 125
 	}
+	// Only a sandbox has /run/box/profile (outside, /run is root's), so
+	// --box-init can't be used to run a program with no sandbox.
+	if _, err := os.Stat("/run/box/profile"); err != nil {
+		fmt.Fprintln(os.Stderr, "box: --box-init only runs inside a box")
+		return 125
+	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	_, ttyErr := unix.IoctlGetTermios(0, unix.TCGETS)

@@ -500,3 +500,27 @@ func TestProgramInFreshFolderIsRefused(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestEnvArgsCarryTheWholeEnvironment(t *testing.T) {
+	f := machine()
+	p := profile.Default("mytool")
+	p.Env.Set = map[string]string{"LD_PRELOAD": "/x.so", "GREETING": "a b=c"}
+	plan, err := Build(f, input(t, f, p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	words := strings.Split(strings.TrimSuffix(string(plan.EnvArgs()), "\x00"), "\x00")
+	if len(words) != 3*len(plan.Env) {
+		t.Fatalf("%d words for %d variables: %q", len(words), len(plan.Env), words)
+	}
+	for i, kv := range plan.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		if got := words[3*i : 3*i+3]; !slices.Equal(got, []string{"--setenv", k, v}) {
+			t.Errorf("variable %d: %q", i, got)
+		}
+	}
+	// The environment travels only through --args, never on the command line.
+	if slices.Contains(plan.Args(), "--setenv") || slices.Contains(plan.Args(), "/x.so") {
+		t.Errorf("environment on the command line: %q", plan.Args())
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -169,6 +170,15 @@ func Exec(bwrap string, plan *Plan) error {
 	if err := plan.Runnable(); err != nil {
 		return err
 	}
+	// Only the descriptors made below reach bwrap, and bwrap closes them
+	// once read: nothing else box inherited leaks into the sandbox.
+	if err := closeOnExec(); err != nil {
+		return err
+	}
+	envFD, err := memfd("box-env", plan.EnvArgs())
+	if err != nil {
+		return err
+	}
 	fd, err := memfd("box-profile", plan.Info)
 	if err != nil {
 		return err
@@ -200,9 +210,31 @@ func Exec(bwrap string, plan *Plan) error {
 			return err
 		}
 	}
-	argv := append([]string{"bwrap"}, plan.Args()...)
-	err = syscall.Exec(bwrap, argv, plan.Env)
+	// bwrap itself gets no environment: a variable such as LD_PRELOAD from
+	// the profile would otherwise load into bwrap, before any sandbox exists.
+	// The program's environment arrives as --setenv operations through --args.
+	argv := append([]string{"bwrap", "--args", strconv.Itoa(envFD)}, plan.Args()...)
+	err = syscall.Exec(bwrap, argv, []string{})
 	return fmt.Errorf("exec %s: %w", bwrap, err)
+}
+
+// closeOnExec marks every descriptor from 3 up close-on-exec.
+func closeOnExec() error {
+	if unix.CloseRange(3, ^uint(0), unix.CLOSE_RANGE_CLOEXEC) == nil {
+		return nil
+	}
+	// Before Linux 5.11: one at a time. ReadDir's own descriptor is closed
+	// by the time the loop runs.
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return fmt.Errorf("listing open files: %w", err)
+	}
+	for _, e := range entries {
+		if fd, err := strconv.Atoi(e.Name()); err == nil && fd > 2 {
+			unix.CloseOnExec(fd)
+		}
+	}
+	return nil
 }
 
 // LandlockABI returns the kernel's Landlock ABI version, or 0 without it.

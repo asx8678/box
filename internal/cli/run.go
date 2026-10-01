@@ -117,6 +117,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "box", version())
 		return 0
 	}
+	// As root the program would keep every capability inside the box.
+	if os.Getuid() == 0 {
+		return fail(stderr, errors.New("box doesn't run as root: run it as your own user, without sudo"))
+	}
 	h := host.OS{}
 	dirs, err := profile.DirsFor(h)
 	if err != nil {

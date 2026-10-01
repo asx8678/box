@@ -1,14 +1,13 @@
-env -i \
-  BOX_PROFILE=bash/default \
-  HOME=/home/u \
-  LANG=C.UTF-8 \
-  LC_TIME=en_GB.UTF-8 \
-  PATH=/home/u/.local/bin:/usr/local/bin:/usr/bin:/bin \
-  PWD=/home/u/code/proj \
-  TERM=xterm-256color \
-  TMPDIR=/tmp \
-/usr/bin/bwrap \
+env -i /usr/bin/bwrap \
   --unshare-all --die-with-parent \
+  --setenv BOX_PROFILE bash/default \
+  --setenv HOME /home/u \
+  --setenv LANG C.UTF-8 \
+  --setenv LC_TIME en_GB.UTF-8 \
+  --setenv PATH /home/u/.local/bin:/usr/local/bin:/usr/bin:/bin \
+  --setenv PWD /home/u/code/proj \
+  --setenv TERM xterm-256color \
+  --setenv TMPDIR /tmp \
   --seccomp 4 \
   --ro-bind /usr /usr \
   --symlink usr/bin /bin \
