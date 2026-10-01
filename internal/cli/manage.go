@@ -62,7 +62,7 @@ func list(dirs profile.Dirs, stdout, stderr io.Writer) int {
 				code = ExitBox
 				continue
 			}
-			fmt.Fprintf(stdout, "  %-12s %s\n", name, summary(p, used[name]))
+			fmt.Fprintf(stdout, "  %-12s %s\n", name, tui.Printable(summary(p, used[name])))
 		}
 	}
 	if shown == 0 {

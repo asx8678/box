@@ -458,6 +458,19 @@ func (e *editor) submitInput() tea.Cmd {
 	return nil
 }
 
+// flushInput adds what an open add box holds, so Save or Preview doesn't
+// throw it away. It reports false, leaving the box open with its error, when
+// what was typed can't be added.
+func (e *editor) flushInput() bool {
+	v := strings.TrimSpace(e.input.Value())
+	if v == "" || (e.inputKind == "folder" && (v == "~/" || v == "~")) {
+		e.closeInput()
+		return true
+	}
+	e.submitInput()
+	return e.inputKind == ""
+}
+
 func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if e.page.update(msg) {
 		if _, ok := msg.(tea.WindowSizeMsg); ok {
@@ -505,7 +518,7 @@ func (e *editor) key(msg tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	}
 	e.note = ""
-	if k != "esc" {
+	if k != "esc" && !((k == "enter" || k == "space") && e.focus == "cancel") {
 		e.armed = false
 	}
 	if e.preview {
@@ -535,6 +548,11 @@ func (e *editor) key(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		case "enter":
 			return e.submitInput()
+		case "ctrl+s":
+			if !e.flushInput() {
+				return nil
+			}
+			return e.save()
 		}
 		var cmd tea.Cmd
 		e.input, cmd = e.input.Update(msg)
@@ -603,7 +621,13 @@ func (e *editor) click(id string) tea.Cmd {
 		return nil
 	}
 	if e.inputKind != "" {
-		e.closeInput()
+		if id == "save" || id == "preview" {
+			if !e.flushInput() {
+				return nil
+			}
+		} else {
+			e.closeInput()
+		}
 	}
 	cmd := e.setFocus(id)
 	if id == "name" {
@@ -1000,7 +1024,7 @@ func (e *editor) inputBox(keys string, w int) []line {
 			if e.hover == "sug:"+strconv.Itoa(n) {
 				st = st.Underline(true)
 			}
-			out = append(out, line{txt("     "), txt(ptr), seg{text: st.Render(shorten(matches[n], w-12)), id: "sug:" + strconv.Itoa(n)}})
+			out = append(out, line{txt("     "), txt(ptr), seg{text: st.Render(shorten(Printable(matches[n]), w-12)), id: "sug:" + strconv.Itoa(n)}})
 		}
 		if len(matches) > 6 {
 			out = append(out, line{txt("       "), styled(styleFaint, fmt.Sprintf("%d folders match", len(matches)))})

@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"strconv"
 	"strings"
+	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -31,12 +33,20 @@ type page struct {
 	width, height int
 	hover         string
 	hits          *lipgloss.Compositor
+	shown         time.Time // when the first frame was drawn
 }
+
+// keyGrace is how long after a screen first appears its keys are ignored:
+// keys typed before it showed (a double-tapped y, an early Enter) would
+// otherwise answer a question nobody has seen.
+var keyGrace = 200 * time.Millisecond
 
 // update handles the messages every screen answers the same way and
 // reports whether msg was one of them.
 func (p *page) update(msg tea.Msg) bool {
 	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		return keyGrace > 0 && (p.shown.IsZero() || time.Since(p.shown) < keyGrace) && msg.String() != "ctrl+c"
 	case tea.WindowSizeMsg:
 		p.width, p.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
@@ -68,6 +78,9 @@ func (p *page) clicked(msg tea.MouseClickMsg) string {
 // draw renders ls, records where every widget is, and returns it as a
 // full-screen view with the mouse enabled, motion included, for hover.
 func (p *page) draw(ls []line, title string) tea.View {
+	if p.shown.IsZero() {
+		p.shown = time.Now()
+	}
 	var content string
 	content, p.hits = render(ls)
 	v := tea.NewView(content)
@@ -124,7 +137,7 @@ func applyTheme(dark bool) {
 
 	btnNormal = fill("#353535", "#E4E4E4", "#E6E6E6", "#1F1F1F")
 	btnHover = fill("#4A4A4A", "#D2D2D2", "#FFFFFF", "#000000")
-	btnFocus = fill("#D77757", "#C15F3C", "#1A1A1A", "#FFFFFF").Bold(true)
+	btnFocus = fill("#4A4A4A", "#D2D2D2", "#FFFFFF", "#000000").Bold(true)
 	btnPrimary = fill("#D77757", "#C15F3C", "#1A1A1A", "#FFFFFF").Bold(true)
 	btnPrimaryHover = fill("#E48B6C", "#D47250", "#1A1A1A", "#FFFFFF").Bold(true)
 	btnPrimaryFocus = fill("#F4AE92", "#9E4526", "#1A1A1A", "#FFFFFF").Bold(true).Underline(true)
@@ -139,8 +152,27 @@ func applyTheme(dark bool) {
 	pillRO = fill("#26335F", "#DDE4FF", "#B4C3FF", "#2F47B8")
 }
 
+// txt is text drawn as it is, styling included; styled draws plain text
+// from anywhere, a folder name included, in st.
 func txt(s string) seg                       { return seg{text: s} }
-func styled(st lipgloss.Style, s string) seg { return seg{text: st.Render(s)} }
+func styled(st lipgloss.Style, s string) seg { return seg{text: st.Render(Printable(s))} }
+
+// Printable shows control characters, escape sequences among them, as
+// visible escapes, so a file or folder name can't drive the terminal.
+func Printable(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			fmt.Fprintf(&b, "\\x%02x", r)
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // gutter starts a row that can show the ❯ pointer.
 func gutter() seg { return seg{text: "    ", ptr: true} }
@@ -162,11 +194,13 @@ func (p *page) button(id, label string, k kind, focused bool) seg {
 		primary:   {btnPrimary, btnPrimaryHover, btnPrimaryFocus},
 		danger:    {btnDanger, btnDangerHover, btnDangerFocus},
 	}[k]
+	// Focus shows as ‹ › as well as colour, so a focused Cancel never looks
+	// like Save & run; the markers take the padding's place, so nothing moves.
+	if focused {
+		return seg{text: st[2].Render("‹ " + label + " ›"), id: id}
+	}
 	i := 0
-	switch {
-	case focused:
-		i = 2
-	case p.hover == id:
+	if p.hover == id {
 		i = 1
 	}
 	return seg{text: st[i].Render("  " + label + "  "), id: id}
@@ -183,7 +217,7 @@ func (e *editor) widget(id, label string, st lipgloss.Style) seg {
 	case e.hover == id:
 		st = st.Underline(true)
 	}
-	return seg{text: st.Render(label), id: id}
+	return seg{text: st.Render(Printable(label)), id: id}
 }
 
 // button is a filled button widget that takes the editor's focus.
@@ -410,7 +444,7 @@ func menu(labels, details []string, selected int, idPrefix string, w int) []line
 		if i == selected {
 			ptr, st = " "+styleAccent.Render("❯")+" ", styleFocus
 		}
-		row := line{txt(ptr), seg{text: st.Render(num + label), id: idPrefix + strconv.Itoa(i)}}
+		row := line{txt(ptr), seg{text: st.Render(num + Printable(label)), id: idPrefix + strconv.Itoa(i)}}
 		if i < len(details) && details[i] != "" {
 			room := w - width(row) - 4
 			d := details[i]

@@ -17,6 +17,12 @@ import (
 	"github.com/asx8678/box/internal/profile"
 )
 
+// The tests send keys at once; TestEarlyKeysAreIgnored covers the grace.
+func TestMain(m *testing.M) {
+	keyGrace = 0
+	os.Exit(m.Run())
+}
+
 func press(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
 
 func typeText(m tea.Model, s string) {
@@ -566,5 +572,63 @@ func TestLaunching(t *testing.T) {
 	}
 	if total := LaunchSteps * LaunchStep; total < time.Second || total > 3*time.Second {
 		t.Errorf("the hold is %v; it should be a moment, not a wait", total)
+	}
+}
+
+func TestEarlyKeysAreIgnored(t *testing.T) {
+	keyGrace = 50 * time.Millisecond
+	defer func() { keyGrace = 0 }()
+	m := &confirm{title: "t", question: "q?"}
+	m.Update(press('y')) // typed before the screen appeared
+	m.View()
+	m.Update(press('y')) // within the grace
+	if m.yes {
+		t.Fatal("a y typed before the question showed answered it")
+	}
+	time.Sleep(60 * time.Millisecond)
+	m.Update(press('y'))
+	if !m.yes {
+		t.Error("y after the grace didn't answer")
+	}
+}
+
+func TestSaveKeepsTextInAnOpenAddBox(t *testing.T) {
+	e := newTestEditor(t)
+	e.openInput("env")
+	typeText(e, "EXTRA_VAR")
+	clickOn(t, e, e.hitsFn(), "save")
+	if e.result == nil || !slices.Contains(e.result.Profile.Env.Pass, "EXTRA_VAR") {
+		t.Fatalf("the typed variable was dropped: %+v", e.result)
+	}
+	e = newTestEditor(t)
+	e.openInput("env")
+	typeText(e, "bad name")
+	clickOn(t, e, e.hitsFn(), "save")
+	if e.result != nil || e.inputKind != "env" || e.inputErr == "" {
+		t.Errorf("an invalid add box should stop the save: result %v, kind %q, err %q", e.result, e.inputKind, e.inputErr)
+	}
+}
+
+func TestCancelConfirmsFromTheKeyboard(t *testing.T) {
+	e := newTestEditor(t)
+	e.setFocus("wd:ro") // a change, so Cancel asks first
+	e.Update(press(tea.KeySpace))
+	e.setFocus("cancel")
+	if _, cmd := e.Update(press(tea.KeyEnter)); cmd != nil {
+		t.Fatal("the first Enter on Cancel should only warn")
+	}
+	if _, cmd := e.Update(press(tea.KeyEnter)); cmd == nil {
+		t.Error("the second Enter on Cancel should leave")
+	}
+}
+
+func TestControlCharactersAreShownEscaped(t *testing.T) {
+	if got := Printable("a\x1b[31mb\n"); got != `a\x1b[31mb\x0a` {
+		t.Errorf("Printable: %q", got)
+	}
+	e := newTestEditor(t)
+	e.items = append(e.items, item{path: "/opt/\x1b]0;evil\x07x", on: true, extra: true})
+	if v := e.View().Content; strings.Contains(v, "\x1b]0;evil") {
+		t.Error("a raw escape sequence from a folder name reached the screen")
 	}
 }
