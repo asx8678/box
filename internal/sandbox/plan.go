@@ -181,8 +181,8 @@ func Build(h host.Host, in Input) (*Plan, error) {
 		{"extra.ro", p.Extra.RO, ROBind, true},
 	} {
 		for _, raw := range l.paths {
-			if err := b.hostPath(l.section, raw, home, l.kind, l.mustExist); err != nil {
-				return nil, err
+			if err := b.hostPath(raw, home, l.kind, l.mustExist); err != nil {
+				return nil, fmt.Errorf("%s: %w", l.section, err)
 			}
 		}
 	}
@@ -387,30 +387,30 @@ func (b *builder) programDirs(dirs []string, wd, home string) error {
 // hostPath adds a profile-configured host path, mounted at the same place
 // inside, after the safety rules. mustExist is false for the program's own
 // folders, which are created before the first run.
-func (b *builder) hostPath(section, raw, home string, k Kind, mustExist bool) error {
+func (b *builder) hostPath(raw, home string, k Kind, mustExist bool) error {
 	expanded, err := profile.Expand(raw, home)
 	if err != nil {
-		return fmt.Errorf("%s: %w", section, err)
+		return err
 	}
 	if err := b.noPlantedSymlink(expanded); err != nil {
-		return fmt.Errorf("%s: %w", section, err)
+		return err
 	}
 	c, err := profile.Canonical(b.h, expanded)
 	if err != nil {
-		return fmt.Errorf("%s: %w", section, err)
+		return err
 	}
 	if _, err := b.h.Stat(c); err != nil {
 		if mustExist {
-			return fmt.Errorf("%s: %s doesn't exist", section, raw)
+			return fmt.Errorf("%s doesn't exist", raw)
 		}
 		b.create = append(b.create, c)
 	}
 	if err := b.prot.CheckMount(b.h, c); err != nil {
-		return fmt.Errorf("%s: %w", section, err)
+		return err
 	}
 	if k == Bind {
 		if err := b.prot.CheckRW(c); err != nil {
-			return fmt.Errorf("%s: %w", section, err)
+			return err
 		}
 	}
 	b.add(k, c, c)

@@ -64,8 +64,8 @@ func (m *confirm) View() tea.View {
 	}
 	ls = append(ls, line{}, line{txt(" "), styled(styleBold, m.question)}, line{}, rule(w), line{})
 	buttons := line{
-		seg{text: btn("No", secondary, !m.onYes, m.hover == "no"), id: "no"}, txt("  "),
-		seg{text: btn("Yes", danger, m.onYes, m.hover == "yes"), id: "yes"}, txt(" "),
+		m.button("no", "No", secondary, !m.onYes), txt("  "),
+		m.button("yes", "Yes", danger, m.onYes), txt(" "),
 	}
 	ls = append(ls, rightAlign(buttons, w), line{})
 	ls = append(ls, hints(w, "y", "yes", "n", "no", "←→", "switch", "enter", "press", "esc", "no")...)

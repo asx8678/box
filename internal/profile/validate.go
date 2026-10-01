@@ -155,11 +155,13 @@ func (p Profile) Validate(program string) error {
 			seen[path] = section
 		}
 	}
-	checkPaths("home.rw", p.Home.RW)
-	checkPaths("home.ro", p.Home.RO)
-	checkPaths("extra.rw", p.Extra.RW)
-	checkPaths("extra.ro", p.Extra.RO)
-	checkPaths("system.extra_ro", p.System.ExtraRO)
+	for _, s := range []struct {
+		section string
+		paths   []string
+	}{{"home.rw", p.Home.RW}, {"home.ro", p.Home.RO}, {"extra.rw", p.Extra.RW}, {"extra.ro", p.Extra.RO},
+		{"system.extra_ro", p.System.ExtraRO}} {
+		checkPaths(s.section, s.paths)
+	}
 
 	for _, k := range p.Env.Pass {
 		if err := CheckEnvName(k); err != nil {

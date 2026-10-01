@@ -106,8 +106,8 @@ func (m *picker) View() tea.View {
 	ls = append(ls, line{}, section("Which profile should run here?", ""), line{})
 	ls = append(ls, menu(names, details, m.cursor, "c:", w)...)
 	buttons := line{
-		seg{text: btn("Cancel", secondary, false, m.hover == "cancel"), id: "cancel"}, txt("  "),
-		seg{text: btn("▶ Run "+m.choices[m.cursor].Name, primary, false, m.hover == "run"), id: "run"}, txt(" "),
+		m.button("cancel", "Cancel", secondary, false), txt("  "),
+		m.button("run", "▶ Run "+m.choices[m.cursor].Name, primary, false), txt(" "),
 	}
 	ls = append(ls, line{}, rule(w), line{}, rightAlign(buttons, w), line{})
 	ls = append(ls, hints(w, "↑↓", "choose", "enter", "run", "1–9", "run that one", "esc", "cancel")...)

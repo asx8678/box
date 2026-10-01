@@ -203,42 +203,17 @@ func (e *editor) dirty() bool {
 
 // ids is the keyboard focus order: the widgets in the order they're drawn.
 func (e *editor) ids() []string {
-	ids := []string{"wd:rw", "wd:ro", "net:off", "net:restricted", "net:on"}
-	if e.p.Network == profile.NetRestricted {
-		if len(e.own) > 0 {
-			ids = append(ids, "own")
-		}
-		ids = append(ids, "gall")
-		for _, kind := range []string{"docs", "service"} {
-			for i, g := range e.groups {
-				if g.Kind == kind {
-					ids = append(ids, fmt.Sprintf("g:%d", i))
-				}
+	w := layoutWidth(e.width)
+	body, _, _ := e.body(w)
+	var ids []string
+	for _, l := range append(body, e.footer(w)...) {
+		for _, s := range l {
+			if s.id != "" && s.id != "input" && !strings.HasPrefix(s.id, "sug:") && !slices.Contains(ids, s.id) {
+				ids = append(ids, s.id)
 			}
 		}
-		for i := range e.hosts {
-			ids = append(ids, fmt.Sprintf("h:%d:rm", i))
-		}
-		ids = append(ids, "add:host")
 	}
-	for pass := 0; pass < 2; pass++ {
-		for i, it := range e.items {
-			if it.extra != (pass == 1) {
-				continue
-			}
-			ids = append(ids, fmt.Sprintf("f:%d:on", i), fmt.Sprintf("f:%d:mode", i))
-			if it.extra {
-				ids = append(ids, fmt.Sprintf("f:%d:rm", i))
-			}
-		}
-		if pass == 1 {
-			ids = append(ids, "add:folder")
-		}
-	}
-	for i := range e.env {
-		ids = append(ids, fmt.Sprintf("e:%d", i))
-	}
-	return append(ids, "add:env", "name", "preview", "cancel", "save")
+	return ids
 }
 
 func (e *editor) move(delta int) tea.Cmd {
@@ -366,24 +341,22 @@ func (e *editor) cancel() tea.Cmd {
 
 func (e *editor) save() tea.Cmd {
 	name := strings.TrimSpace(e.name.Value())
-	if !profile.ValidName(name) {
+	e.preview = false
+	switch {
+	case !profile.ValidName(name):
 		e.msg = fmt.Sprintf("Profile name %q: use letters, digits, '.', '_', '+' and '-'.", name)
-		e.preview = false
-		return e.setFocus("name")
-	}
-	if (e.opts.New || name != e.opts.Name) && e.opts.Exists(name) {
+	case (e.opts.New || name != e.opts.Name) && e.opts.Exists(name):
 		e.msg = fmt.Sprintf("A profile called %q already exists; choose another name.", name)
-		e.preview = false
-		return e.setFocus("name")
+	default:
+		p := e.build()
+		if _, err := e.opts.Plan(p, name); err != nil {
+			e.msg = err.Error()
+			return nil
+		}
+		e.result = &Result{Profile: p, Name: name}
+		return tea.Quit
 	}
-	p := e.build()
-	if _, err := e.opts.Plan(p, name); err != nil {
-		e.msg = err.Error()
-		e.preview = false
-		return nil
-	}
-	e.result = &Result{Profile: p, Name: name}
-	return tea.Quit
+	return e.setFocus("name")
 }
 
 func (e *editor) openPreview() {
@@ -760,8 +733,7 @@ func (e *editor) body(w int) (ls []line, first, last int) {
 	folder := func(i int, it item) line {
 		right := []seg{e.pill(fmt.Sprintf("f:%d:mode", i), it.rw)}
 		if it.extra {
-			right = append(right, txt(" "), seg{text: btn("✕", secondary, e.focused(fmt.Sprintf("f:%d:rm", i)),
-				e.hover == fmt.Sprintf("f:%d:rm", i)), id: fmt.Sprintf("f:%d:rm", i)})
+			right = append(right, txt(" "), e.button(fmt.Sprintf("f:%d:rm", i), "✕", secondary))
 		}
 		note := ""
 		if it.suggest && !it.on {
@@ -1045,8 +1017,8 @@ func (e *editor) previewLines(w int) []line {
 	}
 	pct := fmt.Sprintf("%3.0f%%", e.view.ScrollPercent()*100)
 	buttons := line{
-		seg{text: btn("Back", secondary, !e.pvSave, e.hover == "pv:back"), id: "pv:back"}, txt("  "),
-		seg{text: btn("▶ Save & run", primary, e.pvSave, e.hover == "pv:save"), id: "pv:save"}, txt(" "),
+		e.page.button("pv:back", "Back", secondary, !e.pvSave), txt("  "),
+		e.page.button("pv:save", "▶ Save & run", primary, e.pvSave), txt(" "),
 	}
 	footer := []line{ruleNote(w, pct), line{}, rightAlign(buttons, w), line{}}
 	footer = append(footer, hints(w, "↑↓ pgup pgdn", "scroll", "tab", "switch button", "esc", "back", "ctrl+s", "save & run")...)

@@ -154,21 +154,22 @@ const (
 	danger
 )
 
-// btn renders a filled button: its role sets the colour, and focus and
-// hover change it, the way native buttons do.
-func btn(label string, k kind, focused, hovered bool) string {
+// button is a filled button widget: its role sets the colour, and focus
+// and hover change it, the way native buttons do.
+func (p *page) button(id, label string, k kind, focused bool) seg {
 	st := map[kind][3]lipgloss.Style{
 		secondary: {btnNormal, btnHover, btnFocus},
 		primary:   {btnPrimary, btnPrimaryHover, btnPrimaryFocus},
 		danger:    {btnDanger, btnDangerHover, btnDangerFocus},
 	}[k]
+	i := 0
 	switch {
 	case focused:
-		return st[2].Render("  " + label + "  ")
-	case hovered:
-		return st[1].Render("  " + label + "  ")
+		i = 2
+	case p.hover == id:
+		i = 1
 	}
-	return st[0].Render("  " + label + "  ")
+	return seg{text: st[i].Render("  " + label + "  "), id: id}
 }
 
 func (e *editor) focused(id string) bool { return e.focus == id && e.inputKind == "" }
@@ -185,9 +186,9 @@ func (e *editor) widget(id, label string, st lipgloss.Style) seg {
 	return seg{text: st.Render(label), id: id}
 }
 
-// button is a filled button widget.
+// button is a filled button widget that takes the editor's focus.
 func (e *editor) button(id, label string, k kind) seg {
-	return seg{text: btn(label, k, e.focused(id), e.hover == id), id: id}
+	return e.page.button(id, label, k, e.focused(id))
 }
 
 // segment is one half of a segmented toggle: filled when chosen, and

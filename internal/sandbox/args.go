@@ -28,26 +28,18 @@ func (p *Plan) ops(infoFD, seccompFD int) [][]string {
 	return append(ops, append([]string{"--"}, p.Command...))
 }
 
+// kindFlags are bwrap's option for each Kind, in Kind's order.
+var kindFlags = [...]string{"--ro-bind", "--bind", "--ro-bind-try", "--symlink", "--proc", "--dev", "--tmpfs", "--ro-bind-data"}
+
 func (m Mount) args(fd int) []string {
+	flag := kindFlags[m.Kind] // panics on an unknown kind
 	switch m.Kind {
-	case ROBind:
-		return []string{"--ro-bind", m.Src, m.Dest}
-	case Bind:
-		return []string{"--bind", m.Src, m.Dest}
-	case ROBindTry:
-		return []string{"--ro-bind-try", m.Src, m.Dest}
-	case Symlink:
-		return []string{"--symlink", m.Src, m.Dest}
-	case Proc:
-		return []string{"--proc", m.Dest}
-	case Dev:
-		return []string{"--dev", m.Dest}
-	case Tmpfs:
-		return []string{"--tmpfs", m.Dest}
+	case Proc, Dev, Tmpfs:
+		return []string{flag, m.Dest}
 	case ROBindData:
-		return []string{"--ro-bind-data", strconv.Itoa(fd), m.Dest}
+		return []string{flag, strconv.Itoa(fd), m.Dest}
 	}
-	panic("sandbox: unknown mount kind")
+	return []string{flag, m.Src, m.Dest}
 }
 
 // DryRun renders the plan as a shell command that can be pasted and run:

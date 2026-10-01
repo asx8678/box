@@ -55,10 +55,12 @@ func Prepare(plan *Plan) error {
 // empty file (0600). For a symlink operation the last component must not
 // exist or already be a symlink (bwrap replaces an identical one).
 func makePath(base, rel string, isDir, symlink bool) error {
-	fd, err := unix.Open(base, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	const dirFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	fd, err := unix.Open(base, dirFlags, 0)
 	if err != nil {
 		return fmt.Errorf("%s: %w", base, err)
 	}
+	defer func() { unix.Close(fd) }() // the folder reached so far
 	parts := strings.Split(rel, "/")
 	at := base
 	for i, name := range parts {
@@ -66,9 +68,7 @@ func makePath(base, rel string, isDir, symlink bool) error {
 		at = filepath.Join(at, name)
 		if last && symlink {
 			var st unix.Stat_t
-			err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW)
-			unix.Close(fd)
-			if err == nil && st.Mode&unix.S_IFMT != unix.S_IFLNK {
+			if unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT != unix.S_IFLNK {
 				return fmt.Errorf("%s exists and isn't a symlink", at)
 			}
 			return nil
@@ -79,11 +79,8 @@ func makePath(base, rel string, isDir, symlink bool) error {
 				nfd, err = unix.Openat(fd, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 			}
 			if err != nil {
-				err = pathErr(fd, name, at, err)
-				unix.Close(fd)
-				return err
+				return pathErr(fd, name, at, err)
 			}
-			unix.Close(fd)
 			defer unix.Close(nfd)
 			var st unix.Stat_t
 			if err := unix.Fstat(nfd, &st); err != nil {
@@ -94,24 +91,19 @@ func makePath(base, rel string, isDir, symlink bool) error {
 			}
 			return nil
 		}
-		nfd, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		nfd, err := unix.Openat(fd, name, dirFlags, 0)
 		if errors.Is(err, unix.ENOENT) {
 			if err := unix.Mkdirat(fd, name, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
-				err = pathErr(fd, name, at, err)
-				unix.Close(fd)
-				return err
+				return pathErr(fd, name, at, err)
 			}
-			nfd, err = unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+			nfd, err = unix.Openat(fd, name, dirFlags, 0)
 		}
 		if err != nil {
-			err = pathErr(fd, name, at, err)
-			unix.Close(fd)
-			return err
+			return pathErr(fd, name, at, err)
 		}
 		unix.Close(fd)
 		fd = nfd
 	}
-	unix.Close(fd)
 	return nil
 }
 

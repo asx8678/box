@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/asx8678/box/internal/host"
@@ -146,15 +147,10 @@ type dirSet struct {
 // add records dir if it isn't under the system paths box always mounts.
 func (d *dirSet) add(dir string) {
 	c, err := profile.Canonical(d.h, dir)
-	if err != nil || c == "/" || systemPath(c) {
-		return // "/" is the prefix of /bin/sh; the real /usr/bin/sh is covered
+	// "/" is the prefix of /bin/sh; the real /usr/bin/sh is covered.
+	if err == nil && c != "/" && !systemPath(c) && !slices.Contains(d.list, c) {
+		d.list = append(d.list, c)
 	}
-	for _, have := range d.list {
-		if have == c {
-			return
-		}
-	}
-	d.list = append(d.list, c)
 }
 
 // interpreter adds the install folders of a script's interpreter: the

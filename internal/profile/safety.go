@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/asx8678/box/internal/host"
@@ -47,16 +48,10 @@ func NewProtected(h host.Host, d Dirs, boxBinary string, wsl bool) (Protected, e
 	p := Protected{Home: d.Home, WSL: wsl}
 	add := func(list *[]string, path string) error {
 		c, err := Canonical(h, path)
-		if err != nil {
-			return err
+		if err == nil && !slices.Contains(*list, c) {
+			*list = append(*list, c)
 		}
-		for _, have := range *list {
-			if have == c {
-				return nil
-			}
-		}
-		*list = append(*list, c)
-		return nil
+		return err
 	}
 	noWrite := []string{
 		d.Config,
