@@ -182,8 +182,10 @@ func readNetLog(d profile.Dirs) []logLine {
 
 // recentlyBlocked lists, newest first, what program's runs had blocked and
 // p still doesn't allow, as entries for allow.hosts: the port only when it
-// isn't 80 or 443.
-func recentlyBlocked(d profile.Dirs, program string, p profile.Profile) []string {
+// isn't 80 or 443. A name blocked for resolving into a private network
+// isn't offered: one click would let it lead into the LAN, so that takes
+// typing it under Custom.
+func recentlyBlocked(d profile.Dirs, program string, p profile.Profile) []tui.Blocked {
 	var entries []egress.Entry
 	for _, set := range p.Allowed() {
 		for _, h := range set.Hosts {
@@ -195,10 +197,10 @@ func recentlyBlocked(d profile.Dirs, program string, p profile.Profile) []string
 		return nil
 	}
 	lines := readNetLog(d)
-	var out []string
+	var out []tui.Blocked
 	for i := len(lines) - 1; i >= 0 && len(out) < 8; i-- {
 		l := lines[i]
-		if l.verdict != "blocked" || !strings.HasPrefix(l.who, program+"/") {
+		if l.verdict != "blocked" || !strings.HasPrefix(l.who, program+"/") || strings.Contains(l.reason, "private") {
 			continue
 		}
 		host, portStr, err := net.SplitHostPort(l.target)
@@ -210,8 +212,8 @@ func recentlyBlocked(d profile.Dirs, program string, p profile.Profile) []string
 		if port == 80 || port == 443 {
 			entry = host
 		}
-		if profile.CheckHost(entry) == nil && !slices.Contains(out, entry) {
-			out = append(out, entry)
+		if profile.CheckHost(entry) == nil && !slices.ContainsFunc(out, func(b tui.Blocked) bool { return b.Host == entry }) {
+			out = append(out, tui.Blocked{Host: entry, Reason: l.reason})
 		}
 	}
 	return out

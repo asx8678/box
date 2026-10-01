@@ -167,6 +167,9 @@ func memfd(name string, data []byte) (int, error) {
 // Exec replaces box with bwrap. It only returns on failure, and then
 // nothing has run: box never falls back to running unsandboxed.
 func Exec(bwrap string, plan *Plan) error {
+	if plan.Network == profile.NetRestricted {
+		return errors.New("a restricted network runs with box's proxy: use Spawn")
+	}
 	fds, err := handOver(plan)
 	if err != nil {
 		return err
@@ -195,6 +198,9 @@ func Spawn(bwrap string, plan *Plan) (int, error) {
 	files := []*os.File{os.Stdin, os.Stdout, os.Stderr}
 	child := make([]int, len(fds)) // their numbers in bwrap: 3, 4, …
 	for i, fd := range fds {
+		// Only the copy at 3+i may reach bwrap; the original would stay
+		// open inside the box. Copying it to its place clears the flag.
+		unix.CloseOnExec(fd)
 		files = append(files, os.NewFile(uintptr(fd), "box-fd"))
 		child[i] = 3 + i
 	}

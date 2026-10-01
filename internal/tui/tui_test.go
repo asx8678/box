@@ -636,11 +636,11 @@ func TestControlCharactersAreShownEscaped(t *testing.T) {
 func TestAllowABlockedHostWithOneClick(t *testing.T) {
 	e := newTestEditor(t)
 	e.opts.Blocked = nil
-	e.blocked = []string{"x.example.com", "y.example.com:8443"}
+	e.blocked = []Blocked{{"x.example.com", "not in the allowed network"}, {"y.example.com:8443", "not in the allowed network"}}
 	e.p.Network = profile.NetRestricted
 	e.width, e.height = 100, 60
 	clickOn(t, e, e.hitsFn(), "b:1")
-	if !slices.Contains(e.hosts, "y.example.com:8443") || slices.Contains(e.blocked, "y.example.com:8443") {
+	if !slices.Contains(e.hosts, "y.example.com:8443") || len(e.blocked) != 1 {
 		t.Errorf("hosts %v, blocked %v", e.hosts, e.blocked)
 	}
 	if !strings.Contains(plain(e.View().Content), "+ x.example.com") {

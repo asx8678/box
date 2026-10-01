@@ -22,13 +22,13 @@ import (
 // the TUI: box's CLI supplies them.
 type Options struct {
 	Profile   profile.Profile
-	Name      string   // profile name to start with
-	New       bool     // creating a profile: the name must not exist yet
-	Workdir   string   // shown in the header
-	Home      string   // for displaying and completing "~/" paths
-	Suggested []string // program folders to offer, unticked ("~/…")
-	EnvHints  []string // variable names to offer, unticked
-	Blocked   []string // hosts a restricted network blocked lately, to allow with a click
+	Name      string    // profile name to start with
+	New       bool      // creating a profile: the name must not exist yet
+	Workdir   string    // shown in the header
+	Home      string    // for displaying and completing "~/" paths
+	Suggested []string  // program folders to offer, unticked ("~/…")
+	EnvHints  []string  // variable names to offer, unticked
+	Blocked   []Blocked // hosts a restricted network blocked lately, to allow with a click
 	// Exists reports whether a profile with this name is already saved.
 	Exists func(name string) bool
 	// CheckPath checks a folder about to be ticked or added: the safety
@@ -38,6 +38,11 @@ type Options struct {
 	// Plan validates the whole profile against the machine and returns
 	// the dry-run command to preview.
 	Plan func(p profile.Profile, name string) (string, error)
+}
+
+// Blocked is a host the restricted network refused, and why.
+type Blocked struct {
+	Host, Reason string
 }
 
 // Result is what the user chose.
@@ -91,7 +96,7 @@ type editor struct {
 	groups   []groupItem // for a restricted network
 	hosts    []string    // custom allowed hosts and IP addresses
 	own      []string    // the program's own servers: always allowed
-	blocked  []string    // lately blocked hosts not yet allowed
+	blocked  []Blocked   // lately blocked hosts not yet allowed
 	focus    string
 
 	name      textinput.Model
@@ -288,7 +293,7 @@ func (e *editor) activate(id string) tea.Cmd {
 		}
 	case "b":
 		if i < len(e.blocked) {
-			host := e.blocked[i]
+			host := e.blocked[i].Host
 			if !slices.Contains(e.hosts, host) {
 				e.hosts = append(e.hosts, host)
 			}
@@ -888,7 +893,7 @@ func (e *editor) allowed(inner int) []line {
 	if len(e.blocked) > 0 {
 		var blocked [][]seg
 		for i, h := range e.blocked {
-			blocked = append(blocked, []seg{e.button(fmt.Sprintf("b:%d", i), "+ "+h, secondary), txt("  ")})
+			blocked = append(blocked, []seg{e.button(fmt.Sprintf("b:%d", i), "+ "+h.Host, secondary), txt("  ")})
 		}
 		rows("Blocked lately", blocked)
 	}
@@ -986,7 +991,8 @@ func (e *editor) describe(id string) string {
 		}
 	case "b":
 		if i < len(e.blocked) {
-			return prog + " tried to reach " + e.blocked[i] + " and box blocked it. Allow it from now on, under Custom."
+			b := e.blocked[i]
+			return prog + " tried to reach " + b.Host + " and box blocked it: " + b.Reason + ". Allow it from now on, under Custom."
 		}
 	case "f":
 		if i >= len(e.items) {

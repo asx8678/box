@@ -190,6 +190,11 @@ func TestRestrictedNetwork(t *testing.T) {
 	if _, _, code := e.run("--no-tui", "sh", "-c", curl+"--noproxy '*' https://example.com"); code == 0 {
 		t.Error("the program reached the network without the proxy")
 	}
+	// Run as box's child, box's own descriptors still don't reach the box.
+	fds, _, _ := e.run("--no-tui", "sh", "-c", `for f in /proc/self/fd/*; do readlink "$f" || true; done`)
+	if strings.Contains(fds, "memfd:") {
+		t.Errorf("box's descriptors leaked into a restricted box:\n%s", fds)
+	}
 	log, _ := os.ReadFile(e.dirs.State + "/net.log")
 	if !strings.Contains(string(log), "sh/default\tblocked\twww.iana.org:443") {
 		t.Errorf("net.log:\n%s", log)

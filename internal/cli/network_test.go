@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -21,12 +20,13 @@ func TestNetLogAndRecentlyBlocked(t *testing.T) {
 	}
 	l.write(egress.Event{Host: "b.example.com", Port: 8443, Reason: "not in the allowed network"})
 	l.write(egress.Event{Host: "evil\n\x1b[31m", Port: 443, Reason: "x"})
+	l.write(egress.Event{Host: "lan.example.com", Port: 443, Reason: "resolves only to private addresses"})
 	l.close()
-	if got := l.blockedSummary(); !strings.HasPrefix(got, "5 connections: a.example.com:443 (3), ") {
+	if got := l.blockedSummary(); !strings.HasPrefix(got, "6 connections: a.example.com:443 (3), ") {
 		t.Errorf("summary %q", got)
 	}
 	data, _ := os.ReadFile(netLogPath(d))
-	if n := strings.Count(string(data), "\n"); n != 6 || strings.Contains(string(data), "\x1b") {
+	if n := strings.Count(string(data), "\n"); n != 7 || strings.Contains(string(data), "\x1b") {
 		t.Errorf("a name from the program broke the log:\n%s", data)
 	}
 	// Another program's blocks aren't offered; an allowed host isn't either.
@@ -35,7 +35,8 @@ func TestNetLogAndRecentlyBlocked(t *testing.T) {
 	other.close()
 	p := profile.Default("tool")
 	p.Allow.Hosts = []string{"b.example.com:8443"}
-	if got := recentlyBlocked(d, "tool", p); !slices.Equal(got, []string{"a.example.com"}) {
+	// Nor is one that resolved into the LAN: that takes typing it.
+	if got := recentlyBlocked(d, "tool", p); len(got) != 1 || got[0].Host != "a.example.com" {
 		t.Errorf("recently blocked %v", got)
 	}
 }
