@@ -33,6 +33,16 @@ jobs:
       - name: End-to-end tests
         env:
           BOX_E2E_REQUIRED: "1"
-        run: go test -count=1 -v ./test/e2e
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./test/e2e 2>&1 | tee e2e.log
+      # Run annotations are public, unlike logs: put the failures in one, so
+      # they can be read without signing in.
+      - name: Report end-to-end failures
+        if: failure()
+        run: |
+          grep -E -- '--- FAIL|_test\.go:[0-9]+:|panic:|^FAIL' e2e.log | head -80 |
+            sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}' | sed 's/^/::error title=e2e failures::/'
+          echo
       - name: Build
         run: make build-linux
